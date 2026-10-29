@@ -6497,7 +6497,8 @@ impl Game<'_> {
             Some(BlockEntity::Brewing(_)) => v.extend(300..305),
             Some(BlockEntity::Crafter(_)) => v.extend(300..310),
             Some(
-                BlockEntity::Sign(_)
+                BlockEntity::Extension { .. }
+                | BlockEntity::Sign(_)
                 | BlockEntity::Jukebox(_)
                 | BlockEntity::Beacon(_)
                 | BlockEntity::Lectern(_)
@@ -6781,7 +6782,8 @@ impl Game<'_> {
                 Some(BlockEntity::Brewing(_)) => {}
                 Some(BlockEntity::Crafter(_)) => self.draw_crafter_screen(batch, ox, oy),
                 Some(
-                    BlockEntity::Sign(_)
+                    BlockEntity::Extension { .. }
+                    | BlockEntity::Sign(_)
                     | BlockEntity::Jukebox(_)
                     | BlockEntity::Beacon(_)
                     | BlockEntity::Lectern(_)
