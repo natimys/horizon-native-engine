@@ -406,6 +406,41 @@ fn blocks_use_existing_state_item_and_protocol_tables() {
         json_file(&root.join("assets/tiles/lang/en_us.json")).unwrap()["block.tiles.tile"],
         "Tile"
     );
+    let mut report = json_file(&base.join("registries.json")).unwrap();
+    report["minecraft:block_entity_type"] = json!({"entries":{}});
+    write(
+        &base,
+        "registries.json",
+        &serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+    let entity_id: ResourceId = "tiles:counter".parse().unwrap();
+    c.block_entities.insert(
+        entity_id.clone(),
+        horizon_native_api::BlockEntityDescriptor {
+            id: entity_id,
+            block: "tiles:tile".parse().unwrap(),
+            version: 1,
+            fields: Default::default(),
+        },
+    );
+    let entity_root = fixture.root(&c).unwrap();
+    let builtin =
+        horizon_protocol::registry::Builtin::load(&entity_root.join("registries.json")).unwrap();
+    assert_eq!(
+        builtin
+            .get("minecraft:block_entity_type")
+            .unwrap()
+            .id("tiles:counter"),
+        Some(0)
+    );
+    assert_eq!(
+        builtin
+            .get("horizon:extension_block_entity")
+            .unwrap()
+            .id("tiles:tile"),
+        Some(0)
+    );
     c.blocks.values_mut().next().unwrap().template = "minecraft:missing".parse().unwrap();
     assert!(fixture.root(&c).is_err());
 }

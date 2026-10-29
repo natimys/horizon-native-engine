@@ -188,6 +188,7 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
     hash.update(format!("{:?}", content.items));
     hash.update(format!("{:?}", content.blocks));
     hash.update(format!("{:?}", content.commands));
+    hash.update(format!("{:?}", content.block_entities));
     let mut identity = hash.clone();
     hash.update(std::path::absolute(base)?.to_string_lossy().as_bytes());
     let cache = cache.join(format!("{:x}", hash.finalize()));
@@ -238,6 +239,46 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
         return Err("creative declarations require registered content".into());
     }
     let root = mod_content::resource_root(base, &mods, &cache)?;
+    if !content.block_entities.is_empty() {
+        let facts = json_file(&root.join("facts.json"))?;
+        let mut registries = json_file(&root.join("registries.json"))?;
+        let entries = registries["minecraft:block_entity_type"]["entries"]
+            .as_object_mut()
+            .ok_or("missing block entity registry")?;
+        let mut next = entries
+            .values()
+            .filter_map(|v| v["protocol_id"].as_i64())
+            .max()
+            .unwrap_or(-1)
+            + 1;
+        let mut mapping = serde_json::Map::new();
+        for entity in content.block_entities.values() {
+            if !content.blocks.contains_key(&entity.block) {
+                return Err("block entity needs a registered native block".into());
+            }
+            let count = facts["states"]
+                .as_array()
+                .ok_or("missing states")?
+                .iter()
+                .filter(|row| row[0].as_str() == Some(entity.block.as_str()))
+                .count();
+            if count != 1 {
+                return Err(format!(
+                    "{}: extension block entities require a single-state block",
+                    entity.id
+                )
+                .into());
+            }
+            if entries.contains_key(entity.id.as_str()) {
+                return Err(format!("block entity type collision: {}", entity.id).into());
+            }
+            entries.insert(entity.id.to_string(), json!({"protocol_id":next}));
+            mapping.insert(entity.block.to_string(), json!({"protocol_id":next}));
+            next += 1;
+        }
+        registries["horizon:extension_block_entity"] = json!({"entries":mapping});
+        write(&root, "registries.json", &serde_json::to_vec(&registries)?)?;
+    }
     if !content.commands.is_empty() {
         let mut tree = json_file(&base.join("commands.json"))?;
         let children = tree["children"]

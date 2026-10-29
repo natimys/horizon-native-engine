@@ -2002,6 +2002,8 @@ impl Game<'_> {
         {
             self.world.block_entities.insert(key, entity);
         }
+        #[cfg(feature = "native-mods")]
+        self.native_api_entity_at(pos);
         Ok(true)
     }
     fn cmd_setblock(&mut self, ctx: &Context) -> R<i32> {

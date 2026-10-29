@@ -17,7 +17,9 @@ impl Game<'_> {
     fn native_authority(&self) -> bool {
         self.remote.is_none()
             && !self._native_api.gameplay.failed
-            && (self._native_api.runtime.has_gameplay_subscribers()
+            && self._native_api.runtime.host_side() != horizon_native_runtime::HostSide::Client
+            && (!self._native_api.runtime.content().block_entities.is_empty()
+                || self._native_api.runtime.has_gameplay_subscribers()
                 || self._native_api.runtime.has_commands())
     }
 
@@ -63,6 +65,7 @@ impl Game<'_> {
         if !self.native_authority() {
             return;
         }
+        self.native_api_entity_at(position);
         let Some(p) = &self.player else {
             return;
         };
@@ -166,7 +169,91 @@ impl Game<'_> {
                 players,
             });
         }
+        if running && !self._native_api.gameplay.failed {
+            self.native_entity_ticks();
+        }
         self.apply_native_actions(None);
+    }
+
+    /// Initialize registered data on ordinary checked player/command/action placements.
+    pub(super) fn native_api_entity_at(&mut self, position: [i32; 3]) {
+        use horizon_client::containers::BlockEntity;
+        let Some(state) = self.pack.assets.registry.state(self.world.block(
+            position[0],
+            position[1],
+            position[2],
+        )) else {
+            return;
+        };
+        let Some(descriptor) = self
+            ._native_api
+            .runtime
+            .content()
+            .block_entities
+            .values()
+            .find(|e| e.block.as_str() == state.name)
+        else {
+            return;
+        };
+        let key = (position[0], position[1], position[2]);
+        if !self.world.block_entities.contains_key(&key) {
+            self.world.block_entities.insert(
+                key,
+                BlockEntity::Extension {
+                    id: descriptor.id.to_string(),
+                    version: descriptor.version,
+                    data: descriptor.fields.clone(),
+                },
+            );
+            self.world
+                .modified
+                .insert((position[0] >> 4, position[2] >> 4));
+            if let Some(log) = &mut self.world.block_log {
+                log.push(key);
+            }
+        }
+    }
+
+    fn native_entity_ticks(&mut self) {
+        use horizon_client::containers::BlockEntity;
+        let mut entities: Vec<_> = self
+            .world
+            .block_entities
+            .iter()
+            .filter_map(|(pos, e)| match e {
+                BlockEntity::Extension { id, version, data } => {
+                    Some((*pos, id.clone(), *version, data.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        entities.sort_by_key(|e| e.0);
+        for (pos, id, version, fields) in entities {
+            let Ok(id) = id.parse::<horizon_native_api::ResourceId>() else {
+                continue;
+            };
+            let Some(descriptor) = self._native_api.runtime.content().block_entities.get(&id)
+            else {
+                continue;
+            };
+            if version != descriptor.version || fields.keys().ne(descriptor.fields.keys()) {
+                log::error!("native block entity schema mismatch at {pos:?}: {id}");
+                self._native_api.gameplay.failed = true;
+                return;
+            }
+            self.native_dispatch(&GameplayEvent::BlockEntityTick {
+                world: WorldSnapshot {
+                    dimension: self.dim.id().parse().expect("dimension"),
+                    tick: self.ticks,
+                },
+                entity: horizon_native_api::BlockEntitySnapshot {
+                    id,
+                    position: [pos.0, pos.1, pos.2],
+                    version,
+                    fields,
+                },
+            });
+        }
     }
 
     /// Namespaced zero-argument commands. Ownership is resolved by the runtime.
@@ -214,7 +301,15 @@ impl Game<'_> {
             return true;
         }
         match self._native_api.runtime.command(&id, &player) {
-            Some(Ok(actions)) => self._native_api.gameplay.actions.extend(actions),
+            Some(Ok(actions)) => {
+                if self._native_api.gameplay.actions.len() + actions.len() > 4096 {
+                    self._native_api.gameplay.actions.clear();
+                    self._native_api.gameplay.failed = true;
+                    log::error!("native gameplay command action queue overflow");
+                } else {
+                    self._native_api.gameplay.actions.extend(actions);
+                }
+            }
             Some(Err(error)) => {
                 log::error!("{error}");
                 self._native_api.gameplay.actions.clear();
@@ -266,6 +361,48 @@ impl Game<'_> {
         let checked: Result<Vec<_>, String> = actions
             .iter()
             .map(|a| match &a.action {
+                GameplayAction::SetBlockEntity { dimension, entity } => {
+                    let descriptor = self
+                        ._native_api
+                        .runtime
+                        .content()
+                        .block_entities
+                        .get(&entity.id)
+                        .ok_or_else(|| {
+                            format!("{}: unknown block entity {}", a.mod_id, entity.id)
+                        })?;
+                    if entity.id.namespace() != a.mod_id
+                        || entity.version != descriptor.version
+                        || entity.fields.keys().ne(descriptor.fields.keys())
+                    {
+                        return Err("block entity owner/schema mismatch".into());
+                    }
+                    if !matches!(
+                        dimension.as_str(),
+                        "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
+                    ) {
+                        return Err("unknown block entity dimension".into());
+                    }
+                    if dimension.as_str() == self.dim.id() {
+                        let pos = entity.position;
+                        let block = self
+                            .pack
+                            .assets
+                            .registry
+                            .state(self.world.block(pos[0], pos[1], pos[2]))
+                            .map(|s| s.name.as_str());
+                        if block != Some(descriptor.block.as_str())
+                            || !self
+                                .world
+                                .block_entities
+                                .get(&(pos[0], pos[1], pos[2]))
+                                .is_some_and(|e| e.id() == entity.id.as_str())
+                        {
+                            return Err("block entity action targets missing/wrong block".into());
+                        }
+                    }
+                    Ok(None)
+                }
                 GameplayAction::Tell { .. } => Ok(None),
                 GameplayAction::SetBlock {
                     dimension,
@@ -303,6 +440,40 @@ impl Game<'_> {
         };
         for (queued, state) in actions.into_iter().zip(states) {
             match &queued.action {
+                GameplayAction::SetBlockEntity { dimension, entity }
+                    if dimension.as_str() == self.dim.id() =>
+                {
+                    let key = (entity.position[0], entity.position[1], entity.position[2]);
+                    let descriptor = &self._native_api.runtime.content().block_entities[&entity.id];
+                    if self
+                        .pack
+                        .assets
+                        .registry
+                        .state(self.world.block(key.0, key.1, key.2))
+                        .map(|s| s.name.as_str())
+                        != Some(descriptor.block.as_str())
+                        || !self
+                            .world
+                            .block_entities
+                            .get(&key)
+                            .is_some_and(|e| e.id() == entity.id.as_str())
+                    {
+                        log::warn!("native block entity action target changed during batch");
+                        continue;
+                    }
+                    self.world.block_entities.insert(
+                        key,
+                        horizon_client::containers::BlockEntity::Extension {
+                            id: entity.id.to_string(),
+                            version: entity.version,
+                            data: entity.fields.clone(),
+                        },
+                    );
+                    self.world.modified.insert((key.0 >> 4, key.2 >> 4));
+                    if let Some(log) = &mut self.world.block_log {
+                        log.push(key);
+                    }
+                }
                 GameplayAction::Tell { player, text } => self.native_tell(
                     host.as_deref_mut(),
                     *player,
