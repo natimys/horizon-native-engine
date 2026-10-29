@@ -409,3 +409,38 @@ fn blocks_use_existing_state_item_and_protocol_tables() {
     c.blocks.values_mut().next().unwrap().template = "minecraft:missing".parse().unwrap();
     assert!(fixture.root(&c).is_err());
 }
+
+#[test]
+fn registered_recipe_crafts_through_ordinary_loader_and_refuses_unknown_items() {
+    let fixture = Fixture::new();
+    fs::create_dir_all(fixture.base().join("data/minecraft/recipe")).unwrap();
+    let mut c = pair(false);
+    let id: ResourceId = "alpha:gear_recipe".parse().unwrap();
+    c.recipes.insert(
+        id.clone(),
+        horizon_native_api::RecipeDescriptor {
+            id,
+            ingredients: vec![
+                "minecraft:stick".parse().unwrap(),
+                "beta:gear".parse().unwrap(),
+            ],
+            result: "alpha:gear".parse().unwrap(),
+            count: 2,
+        },
+    );
+    let root = fixture.root(&c).unwrap();
+    let items = crate::items::Items::catalog(&root).unwrap();
+    let recipes = crate::crafting::Recipes::load(&root, &items).unwrap();
+    let grid = [
+        Some(crate::items::ItemStack::new("beta:gear", 1)),
+        None,
+        None,
+        Some(crate::items::ItemStack::new("minecraft:stick", 1)),
+    ];
+    let (id, result) = recipes.find(&grid, 2).unwrap();
+    assert_eq!(id, "alpha:gear_recipe");
+    assert_eq!(&*result.item, "alpha:gear");
+    assert_eq!(result.count, 2);
+    c.recipes.values_mut().next().unwrap().ingredients[0] = "minecraft:missing".parse().unwrap();
+    assert!(fixture.root(&c).is_err());
+}

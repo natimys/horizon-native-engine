@@ -158,6 +158,16 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
             return Err("native resource attempts to redefine a block declaration".into());
         }
     }
+    for recipe in content.recipes.values() {
+        let path = format!(
+            "data/{}/recipe/{}.json",
+            recipe.id.namespace(),
+            recipe.id.as_str().split_once(':').expect("validated ID").1
+        );
+        if files.insert(path,serde_json::to_vec(&json!({"type":"minecraft:crafting_shapeless","ingredients":recipe.ingredients.iter().map(|id|id.as_str()).collect::<Vec<_>>(),"result":{"id":recipe.result.as_str(),"count":recipe.count}}))?).is_some() {
+            return Err(format!("recipe declaration/resource collision: {}",recipe.id).into());
+        }
+    }
     let mut hash = Sha256::new();
     for (path, bytes) in &files {
         hash.update((path.len() as u64).to_le_bytes());
@@ -227,6 +237,37 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
         crate::registry_pack::FILE,
         &serde_json::to_vec(&json!({"sha256":format!("{:x}",identity.finalize())}))?,
     )?;
+    if !content.recipes.is_empty() {
+        let items = crate::items::Items::catalog(&root)?;
+        let recipes = crate::crafting::Recipes::load(&root, &items)?;
+        for recipe in content.recipes.values() {
+            for id in recipe
+                .ingredients
+                .iter()
+                .chain(std::iter::once(&recipe.result))
+            {
+                if items.get(id.as_str()).is_none() {
+                    return Err(format!("{}: unknown recipe item {id}", recipe.id).into());
+                }
+            }
+            if u32::from(recipe.count)
+                > items
+                    .get(recipe.result.as_str())
+                    .expect("checked")
+                    .max_stack
+                || !recipes
+                    .crafting
+                    .iter()
+                    .any(|(id, _)| id == recipe.id.as_str())
+            {
+                return Err(format!(
+                    "{}: recipe not loadable or exceeds result stack limit",
+                    recipe.id
+                )
+                .into());
+            }
+        }
+    }
     // Preserve earlier overlay namespaces so language and model discovery sees both.
     let mut namespaces: BTreeSet<_> = mod_content::namespaces(base).into_iter().collect();
     namespaces.extend(mod_content::namespaces(&root));
