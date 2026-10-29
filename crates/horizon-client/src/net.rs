@@ -108,7 +108,7 @@ impl Session {
         view_distance: i8,
         lang: Arc<Language>,
     ) -> Self {
-        Self::start(address, name, auth, view_distance, lang, None, None)
+        Self::start(address, name, auth, view_distance, lang, None, None, None)
     }
     /// `ConnectScreen.startConnecting` for a `transfer`: the cookies the
     /// server stored carry to the new connection (`TransferState`).
@@ -128,6 +128,7 @@ impl Session {
             lang,
             None,
             Some(cookies),
+            None,
         )
     }
     /// Join an integrated server through memory (`Connection.connectToLocalServer`).
@@ -137,7 +138,39 @@ impl Session {
         view_distance: i8,
         lang: Arc<Language>,
     ) -> Self {
-        Self::start("local", name, None, view_distance, lang, Some(pipe), None)
+        Self::start(
+            "local",
+            name,
+            None,
+            view_distance,
+            lang,
+            Some(pipe),
+            None,
+            None,
+        )
+    }
+    /// Resource-aware connection, including the optional static-content identity.
+    pub fn connect_resources(
+        resources: &std::path::Path,
+        address: &str,
+        name: &str,
+        auth: Option<Arc<AuthSession>>,
+        view_distance: i8,
+        lang: Arc<Language>,
+        local: Option<horizon_protocol::connection::Pipe>,
+        cookies: Option<Cookies>,
+    ) -> Result<Self, String> {
+        let required = crate::registry_pack::load(resources)?;
+        Ok(Self::start(
+            address,
+            name,
+            auth,
+            view_distance,
+            lang,
+            local,
+            cookies,
+            required,
+        ))
     }
     fn start(
         address: &str,
@@ -147,6 +180,7 @@ impl Session {
         lang: Arc<Language>,
         local: Option<horizon_protocol::connection::Pipe>,
         cookies: Option<Cookies>,
+        required: Option<cfg::KnownPack>,
     ) -> Self {
         let (send, events) = channel();
         let writer = Arc::new(Mutex::new(None));
@@ -176,6 +210,7 @@ impl Session {
                     &thread_counters,
                     &thread_cookies,
                     transferred,
+                    required.as_ref(),
                 );
                 let from_server = result.is_ok();
                 let reason = result.unwrap_or_else(|e| e);
@@ -382,6 +417,7 @@ fn run(
     shared_counters: &Mutex<Option<Arc<Counters>>>,
     cookies: &Cookies,
     transferred: bool,
+    required: Option<&cfg::KnownPack>,
 ) -> Result<String, String> {
     let (host, port, mut c) = if let Some(pipe) = local {
         (address.to_owned(), 0, Connection::local(pipe))
@@ -517,13 +553,29 @@ fn run(
     .map_err(e)?;
     let (mut reader, writer) = c.split();
     *shared_writer.lock().unwrap() = Some(writer);
-    let registries = configure(&mut reader, shared_writer, configuring, lang, send, cookies)?;
+    let registries = configure(
+        &mut reader,
+        shared_writer,
+        configuring,
+        lang,
+        send,
+        cookies,
+        required,
+    )?;
     let _ = send.send(Event::Joined {
         registries: Arc::new(registries),
         uuid: profile.uuid,
         name: profile.name,
     });
-    receive_play(&mut reader, shared_writer, configuring, lang, send, cookies)
+    receive_play(
+        &mut reader,
+        shared_writer,
+        configuring,
+        lang,
+        send,
+        cookies,
+        required,
+    )
 }
 
 fn receive_play(
@@ -533,6 +585,7 @@ fn receive_play(
     lang: &Language,
     send: &Sender<Event>,
     cookies: &Cookies,
+    required: Option<&cfg::KnownPack>,
 ) -> Result<String, String> {
     loop {
         let (id, payload) = reader.recv().map_err(|e| e.to_string())?;
@@ -568,8 +621,15 @@ fn receive_play(
                     let _ = w.send(&play::Serverbound::ConfigurationAcknowledged(Empty).encode());
                     configuring.store(true, Ordering::Relaxed);
                 }
-                let registries =
-                    configure(reader, shared_writer, configuring, lang, send, cookies)?;
+                let registries = configure(
+                    reader,
+                    shared_writer,
+                    configuring,
+                    lang,
+                    send,
+                    cookies,
+                    required,
+                )?;
                 let _ = send.send(Event::Reconfigured(Arc::new(registries)));
             }
             // ClientCommonPacketListenerImpl.handleRequestCookie: the stored
@@ -618,8 +678,10 @@ fn configure(
     lang: &Language,
     send: &Sender<Event>,
     cookies: &Cookies,
+    required: Option<&cfg::KnownPack>,
 ) -> Result<Dynamic, String> {
     let mut registries = Dynamic::default();
+    let mut identity_checked = required.is_none();
     let reply = |p: cfg::Serverbound| -> Result<(), String> {
         match writer.lock().unwrap().as_mut() {
             Some(w) => w.send(&p.encode()).map_err(|e| e.to_string()),
@@ -633,9 +695,11 @@ fn configure(
             cfg::Clientbound::CustomPayload(p) => receive_brand(&p, send),
             cfg::Clientbound::Ping(p) => reply(cfg::Serverbound::Pong(p))?,
             // Know no packs: the server then sends every registry entry in full.
-            cfg::Clientbound::SelectKnownPacks(_) => {
+            cfg::Clientbound::SelectKnownPacks(p) => {
+                let selected = crate::registry_pack::select(required, &p.packs)?;
+                identity_checked = true;
                 reply(cfg::Serverbound::SelectKnownPacks(cfg::SelectKnownPacks {
-                    packs: vec![],
+                    packs: selected,
                 }))?
             }
             cfg::Clientbound::RegistryData(r) => registries.add(r),
@@ -679,6 +743,11 @@ fn configure(
             }
             cfg::Clientbound::Disconnect(d) => return Err(plain(&d.reason, lang)),
             cfg::Clientbound::FinishConfiguration(_) => {
+                if !identity_checked {
+                    return Err(
+                        "Server did not confirm the required static content identity".into(),
+                    );
+                }
                 let mut w = writer.lock().unwrap();
                 let w = w.as_mut().ok_or("Disconnected")?;
                 w.send(&cfg::Serverbound::FinishConfiguration(Empty).encode())
@@ -801,6 +870,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn configuration_confirms_static_identity_and_refuses_mismatch_before_join() {
+        for case in ["match", "different", "absent", "skipped"] {
+            let (client, server) = horizon_protocol::connection::Pipe::pair();
+            let (mut reader, writer) = Connection::local(client).split();
+            let (send, _) = channel();
+            let required = crate::registry_pack::identity("a".repeat(64));
+            let local = required.clone();
+            let thread = std::thread::spawn(move || {
+                configure(
+                    &mut reader,
+                    &Mutex::new(Some(writer)),
+                    &AtomicBool::new(true),
+                    &Language::new(),
+                    &send,
+                    &Cookies::default(),
+                    Some(&local),
+                )
+            });
+            let mut server = Connection::local(server);
+            if case != "skipped" {
+                let packs = match case {
+                    "match" => vec![required.clone()],
+                    "different" => vec![crate::registry_pack::identity("b".repeat(64))],
+                    _ => vec![],
+                };
+                server
+                    .send(
+                        &cfg::Clientbound::SelectKnownPacks(cfg::SelectKnownPacks { packs })
+                            .encode(),
+                    )
+                    .unwrap();
+                if case == "match" {
+                    let (id, body) = server.recv().unwrap();
+                    let cfg::Serverbound::SelectKnownPacks(selected) =
+                        cfg::Serverbound::decode(id, &body).unwrap()
+                    else {
+                        panic!("missing pack response")
+                    };
+                    crate::registry_pack::confirm(Some(&required), &selected.packs).unwrap();
+                }
+            }
+            if case == "match" || case == "skipped" {
+                server
+                    .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
+                    .unwrap();
+            }
+            let result = thread.join().unwrap();
+            assert_eq!(result.is_ok(), case == "match", "{case}");
+        }
+    }
+
+    #[test]
     fn pings_wait_behind_teleports_but_keepalives_do_not_wait_for_the_game() {
         let (client, server) = horizon_protocol::connection::Pipe::pair();
         let (mut reader, writer) = Connection::local(client).split();
@@ -815,6 +936,7 @@ mod tests {
                 &Language::new(),
                 &send,
                 &Cookies::default(),
+                None,
             )
         });
         let mut server = Connection::local(server);
@@ -877,6 +999,7 @@ mod tests {
                 &Language::new(),
                 &send,
                 &Cookies::default(),
+                None,
             )
         });
         let mut server = Connection::local(server);
@@ -923,6 +1046,7 @@ mod tests {
                 &Language::new(),
                 &send,
                 &thread_cookies,
+                None,
             )
         });
         let mut server = Connection::local(server);

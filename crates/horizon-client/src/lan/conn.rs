@@ -825,7 +825,9 @@ fn login_and_configure(
     send(
         c,
         cfg::Clientbound::SelectKnownPacks(cfg::SelectKnownPacks {
-            packs: vec![core.clone()],
+            packs: std::iter::once(core.clone())
+                .chain(sync.required_pack.clone())
+                .collect(),
         }),
     )?;
     let mut info = ClientInformation::new(10);
@@ -839,7 +841,20 @@ fn login_and_configure(
                     .string(32767)
                     .unwrap_or(brand);
             }
-            cfg::Serverbound::SelectKnownPacks(p) => break p.packs == vec![core.clone()],
+            cfg::Serverbound::SelectKnownPacks(p) => {
+                if let Err(reason) =
+                    crate::registry_pack::confirm(sync.required_pack.as_ref(), &p.packs)
+                {
+                    let _ = send(
+                        c,
+                        cfg::Clientbound::Disconnect(cfg::Disconnect {
+                            reason: horizon_world::nbt::Tag::String(reason.as_str().into()),
+                        }),
+                    );
+                    return Err(reason);
+                }
+                break p.packs.contains(&core);
+            }
             _ => {}
         }
     };

@@ -374,23 +374,19 @@ impl Game<'_> {
             |a| (a.name.clone(), a.uuid),
         );
         self.server_packs_connect(local.is_none().then_some(address), user);
-        let session = match local {
-            Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
-            None => {
-                self.extras_connecting(address, name);
-                match cookies {
-                    Some(cookies) => Session::connect_transferred(
-                        address,
-                        name,
-                        auth.clone(),
-                        view,
-                        lang.clone(),
-                        cookies,
-                    ),
-                    None => Session::connect(address, name, auth.clone(), view, lang.clone()),
-                }
-            }
-        };
+        if local.is_none() {
+            self.extras_connecting(address, name);
+        }
+        let session = Session::connect_resources(
+            &root,
+            address,
+            name,
+            auth.clone(),
+            view,
+            lang.clone(),
+            local,
+            cookies,
+        )?;
         let player_type = super::perspective::player_type(&root);
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),

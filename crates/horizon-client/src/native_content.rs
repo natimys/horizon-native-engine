@@ -135,6 +135,7 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
     // Tab/title changes also invalidate the derived overlay.
     hash.update(format!("{:?}", content.tabs));
     hash.update(format!("{:?}", content.items));
+    let mut identity = hash.clone();
     hash.update(std::path::absolute(base)?.to_string_lossy().as_bytes());
     let cache = cache.join(format!("{:x}", hash.finalize()));
     let source = cache.join("sources");
@@ -184,6 +185,14 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
         return Err("creative declarations require registered content".into());
     }
     let root = mod_content::resource_root(base, &mods, &cache)?;
+    identity.update(serde_json::to_vec(&json_file(
+        &root.join("registries.json"),
+    )?)?);
+    write(
+        &root,
+        crate::registry_pack::FILE,
+        &serde_json::to_vec(&json!({"sha256":format!("{:x}",identity.finalize())}))?,
+    )?;
     // Preserve earlier overlay namespaces so language and model discovery sees both.
     let mut namespaces: BTreeSet<_> = mod_content::namespaces(base).into_iter().collect();
     namespaces.extend(mod_content::namespaces(&root));

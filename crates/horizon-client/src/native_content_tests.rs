@@ -207,3 +207,22 @@ fn empty_native_pack_keeps_original_resource_root() {
         fixture.base()
     );
 }
+
+#[test]
+fn static_pack_identity_ignores_cache_paths_and_registration_order() {
+    let a = Fixture::new();
+    let b = Fixture::new();
+    let one = a.root(&pair(false)).unwrap();
+    let two = b.root(&pair(true)).unwrap();
+    let first = crate::registry_pack::load(&one).unwrap().unwrap();
+    assert_eq!(
+        Some(first.clone()),
+        crate::registry_pack::load(&two).unwrap()
+    );
+    let mut changed = pair(false);
+    changed
+        .resources
+        .insert("assets/alpha/lang/ru_ru.json".into(), b"{}".to_vec());
+    let changed = b.root(&changed).unwrap();
+    assert_ne!(Some(first), crate::registry_pack::load(&changed).unwrap());
+}

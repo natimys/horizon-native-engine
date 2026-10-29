@@ -59,6 +59,7 @@ struct Entries {
 
 pub struct SyncData {
     pub builtin: Builtin,
+    pub required_pack: Option<horizon_protocol::packets::configuration::KnownPack>,
     /// Entry names per synchronized registry (for id lookups).
     pub dynamic: Dynamic,
     registries: Vec<(String, Entries)>,
@@ -146,6 +147,7 @@ impl SyncData {
         }
         let tags = Self::load_tags(&root, &builtin, &dynamic);
         let mut sync = Self {
+            required_pack: crate::registry_pack::load(resources)?,
             builtin,
             dynamic,
             registries,
