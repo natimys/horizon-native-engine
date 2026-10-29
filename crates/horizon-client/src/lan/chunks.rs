@@ -407,8 +407,10 @@ impl ChunkEncoder {
                     f |= FLUID;
                 }
             }
-            let t = block_entity_type(&name)
-                .and_then(|t| types.and_then(|ids| ids.id(t)))
+            let t = builtin
+                .get("horizon:extension_block_entity")
+                .and_then(|ids| ids.id(&name))
+                .or_else(|| block_entity_type(&name).and_then(|t| types.and_then(|ids| ids.id(t))))
                 .map_or(-1, |v| v as i16);
             if t >= 0 {
                 f |= ENTITY;
@@ -938,6 +940,13 @@ fn java_hash_order<T>(items: &mut Vec<T>, pos: impl Fn(&T) -> (i32, i32, i32)) {
 /// The update tag of a block entity (getUpdateTag) for what the client shows.
 pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
     match entity {
+        BlockEntity::Extension { version, data, .. } => Some(Tag::compound([
+            ("horizon:extension_version", Tag::Long(i64::from(*version))),
+            (
+                "horizon:extension_data",
+                Tag::compound(data.iter().map(|(k, v)| (k.as_str(), Tag::Long(*v)))),
+            ),
+        ])),
         BlockEntity::Sign(sign) => Some(Tag::compound(sign.encode())),
         BlockEntity::Spawner(s) => Some(s.update_tag()),
         // BannerBlockEntity.getUpdateTag: saveWithoutMetadata, so the patterns,
@@ -1479,5 +1488,27 @@ mod tests {
             &nether.light.empty_block_mask,
             18
         ));
+    }
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+    #[test]
+    fn registered_extension_type_and_update_tag_use_existing_transport() {
+        let builtin=Builtin::parse(r#"{"minecraft:block_entity_type":{"entries":{"counter:counter":{"protocol_id":9}}},"horizon:extension_block_entity":{"entries":{"counter:block":{"protocol_id":9}}}}"#).unwrap();
+        let encoder = ChunkEncoder::new([(Arc::from("counter:block"), false)], &builtin, &[], &[]);
+        assert_eq!(encoder.entity_type(0), Some(9));
+        let entity = BlockEntity::Extension {
+            id: "counter:counter".into(),
+            version: 1,
+            data: std::collections::BTreeMap::from([("ticks".into(), 7)]),
+        };
+        let tag = entity_tag(&entity).unwrap();
+        assert_eq!(tag.get("horizon:extension_version"), Some(&Tag::Long(1)));
+        assert_eq!(
+            tag.get("horizon:extension_data").unwrap().get("ticks"),
+            Some(&Tag::Long(7))
+        );
     }
 }

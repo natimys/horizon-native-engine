@@ -36,6 +36,13 @@ pub struct Furnace {
 }
 #[derive(Clone, Debug)]
 pub enum BlockEntity {
+    /// Generic extension payload. Single-state registered blocks; behavior is
+    /// supplied by an optional host adapter, never by this storage layer.
+    Extension {
+        id: String,
+        version: u32,
+        data: std::collections::BTreeMap<String, i64>,
+    },
     Chest(Vec<Option<ItemStack>>),
     Furnace(Furnace),
     Brewing(Box<BrewingStand>),

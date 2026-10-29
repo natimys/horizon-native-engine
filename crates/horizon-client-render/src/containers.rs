@@ -305,8 +305,9 @@ impl BlockEntity {
         };
         Some(Self::Chest(vec![None; size]))
     }
-    pub fn id(&self) -> &'static str {
+    pub fn id(&self) -> &str {
         match self {
+            Self::Extension { id, .. } => id,
             Self::Chest(items) => match items.len() {
                 HOPPER_SLOTS => "minecraft:hopper",
                 9 => "minecraft:dispenser",
@@ -343,6 +344,7 @@ impl BlockEntity {
             Self::Chest(items) => items.iter().flatten().cloned().collect(),
             Self::Furnace(f) => f.items.iter().flatten().cloned().collect(),
             Self::Brewing(b) => b.items.iter().flatten().cloned().collect(),
+            Self::Extension { .. } => Vec::new(),
             Self::Sign(_) => Vec::new(),
             Self::Jukebox(j) => j.record.iter().cloned().collect(),
             Self::Beacon(_)
@@ -365,6 +367,7 @@ impl BlockEntity {
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
         match self {
+            Self::Extension{..} => &[],
             Self::Chest(items) => items,
             Self::Furnace(f) => &f.items,
             Self::Brewing(b) => &b.items,
@@ -391,6 +394,7 @@ impl BlockEntity {
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
         match self {
+            Self::Extension { .. } => &mut [],
             Self::Chest(items) => items,
             Self::Furnace(f) => &mut f.items,
             Self::Brewing(b) => &mut b.items,

@@ -437,6 +437,13 @@ pub fn encode_block_entity(
         ("components", Tag::Compound(components)),
     ];
     match e {
+        BlockEntity::Extension { version, data, .. } => {
+            entries.push(("horizon:extension_version", Tag::Long(i64::from(*version))));
+            entries.push((
+                "horizon:extension_data",
+                Tag::compound(data.iter().map(|(k, v)| (k.as_str(), Tag::Long(*v)))),
+            ));
+        }
         BlockEntity::Chest(items) => entries.push(("Items", encode_items(items))),
         BlockEntity::Furnace(f) => {
             entries.push(("Items", encode_items(&f.items)));
@@ -616,6 +623,33 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
+    if let Some(Tag::Long(version)) = tag.get("horizon:extension_version") {
+        let (namespace, path) = id.split_once(':')?;
+        if namespace.is_empty()
+            || namespace == "minecraft"
+            || path.is_empty()
+            || !id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_:./-".contains(&b))
+        {
+            return None;
+        }
+        let version = u32::try_from(*version).ok().filter(|v| *v > 0)?;
+        let Tag::Compound(fields) = tag.get("horizon:extension_data")? else {
+            return None;
+        };
+        if fields.len() > 64 {
+            return None;
+        }
+        let data = fields
+            .iter()
+            .map(|(k, v)| match v {
+                Tag::Long(value) => Some((k.to_string_lossy(), *value)),
+                _ => None,
+            })
+            .collect::<Option<std::collections::BTreeMap<_, _>>>()?;
+        return Some((pos, BlockEntity::Extension { id, version, data }));
+    }
     if id == "minecraft:end_gateway" {
         return Some((pos, BlockEntity::EndGateway(decode_end_gateway(tag))));
     }
@@ -678,6 +712,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     };
     let mut entity = BlockEntity::for_block(block)?;
     match &mut entity {
+        BlockEntity::Extension { .. } => {}
         BlockEntity::Chest(items) => *items = decode_items(tag.get("Items"), items.len()),
         BlockEntity::Furnace(f) => {
             let items = decode_items(tag.get("Items"), 3);
@@ -5495,5 +5530,42 @@ mod tests {
             );
         }
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+    #[test]
+    fn extension_entity_roundtrip_keeps_names_versions_and_integer_payload() {
+        let data = std::collections::BTreeMap::from([
+            ("visits".into(), i64::MAX),
+            ("negative".into(), -42),
+        ]);
+        let entity = crate::containers::BlockEntity::Extension {
+            id: "counter:counter".into(),
+            version: 1,
+            data: data.clone(),
+        };
+        let tag = encode_block_entity((1, 65, 3), &entity, "counter:block");
+        let (pos, back) = decode_block_entity(&tag).unwrap();
+        assert_eq!(pos, (1, 65, 3));
+        let crate::containers::BlockEntity::Extension {
+            id,
+            version,
+            data: back_data,
+        } = back
+        else {
+            panic!("wrong type");
+        };
+        assert_eq!(id, "counter:counter");
+        assert_eq!(version, 1);
+        assert_eq!(back_data, data);
+        let mut invalid = tag.clone();
+        put(&mut invalid, "id", string("minecraft:chest"));
+        assert!(decode_block_entity(&invalid).is_none());
+        put(&mut invalid, "id", string("counter:counter"));
+        put(&mut invalid, "horizon:extension_version", Tag::Long(0));
+        assert!(decode_block_entity(&invalid).is_none());
     }
 }

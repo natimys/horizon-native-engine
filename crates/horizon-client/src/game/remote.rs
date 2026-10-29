@@ -1196,6 +1196,36 @@ impl Game<'_> {
         else {
             return;
         };
+        // Registered generic extension types use the same chunk/update transport.
+        if let Some(remote) = &self.remote {
+            let block = self
+                .pack
+                .assets
+                .registry
+                .state(self.world.block(pos[0], pos[1], pos[2]))
+                .map(|s| s.name.as_str());
+            let extension = block.and_then(|block| {
+                remote
+                    .builtin
+                    .get("horizon:extension_block_entity")?
+                    .id(block)
+            });
+            if extension == Some(kind) {
+                if let Tag::Compound(fields) = tag {
+                    let mut full = fields.clone();
+                    full.insert("id".into(), Tag::String(name.into()));
+                    for (k, v) in ["x", "y", "z"].into_iter().zip(pos) {
+                        full.insert(k.into(), Tag::Int(v));
+                    }
+                    if let Some((_, entity @ BlockEntity::Extension { .. })) =
+                        horizon_client::save::decode_block_entity(&Tag::Compound(full))
+                    {
+                        self.world.block_entities.insert(key, entity);
+                    }
+                }
+                return;
+            }
+        }
         // A decorated pot is no block entity here: its tag is kept with the chunk.
         if name == "minecraft:decorated_pot" {
             if let Tag::Compound(fields) = tag

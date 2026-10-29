@@ -261,6 +261,14 @@ impl World {
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
         if previous != state.0 {
+            // Extension entities currently support single-state blocks. A
+            // replacement always removes data, including two writes in one tick.
+            if matches!(
+                self.block_entities.get(&(x, y, z)),
+                Some(crate::chunk::block_entity::BlockEntity::Extension { .. })
+            ) {
+                self.block_entities.remove(&(x, y, z));
+            }
             self.block_entities
                 .state_changed((x, y, z), previous, state.0);
             let watches = |id: u32| self.watched.get(id as usize).copied().unwrap_or(false);
@@ -497,5 +505,39 @@ mod tests {
         // Past the top, and the palette of air below it.
         assert!(!world.may_hold([0, 400, 0], [0, 401, 0], nine));
         assert!(world.may_hold([0, 400, 0], [0, 401, 0], |s| s.0 == 0));
+    }
+}
+
+#[cfg(test)]
+mod extension_tests {
+    use super::*;
+    #[test]
+    fn replacing_extension_block_cannot_resurrect_its_payload() {
+        let mut world = World::new(horizon_world::registry::BlockStateId(0), 0);
+        world
+            .chunks
+            .insert((0, 0), Arc::new(crate::chunk::Chunk::empty(0, 0)));
+        world
+            .set(1, 65, 1, horizon_world::registry::BlockStateId(1))
+            .unwrap();
+        world.block_entities.insert(
+            (1, 65, 1),
+            crate::chunk::block_entity::BlockEntity::Extension {
+                id: "test:counter".into(),
+                version: 1,
+                data: Default::default(),
+            },
+        );
+        world
+            .set(1, 65, 1, horizon_world::registry::BlockStateId(1))
+            .unwrap();
+        assert!(world.block_entities.contains_key(&(1, 65, 1)));
+        world
+            .set(1, 65, 1, horizon_world::registry::BlockStateId(0))
+            .unwrap();
+        world
+            .set(1, 65, 1, horizon_world::registry::BlockStateId(1))
+            .unwrap();
+        assert!(!world.block_entities.contains_key(&(1, 65, 1)));
     }
 }
