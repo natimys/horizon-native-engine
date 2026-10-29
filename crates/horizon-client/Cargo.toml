@@ -8,6 +8,10 @@ rust-version = "1.90"
 description = "Horizon native development client"
 
 [dependencies]
+# Trusted Rust mods, statically composed outside the engine; opt-in only.
+horizon-native-api = { path = "../../../native-mods/api", optional = true }
+horizon-native-runtime = { path = "../../../native-mods/runtime", optional = true }
+horizon-native-pack = { path = "../../../native-mods/pack", optional = true }
 horizon-assets = { path = "../horizon-assets" }
 horizon-client-core = { path = "../horizon-client-core" }
 horizon-client-input = { path = "../horizon-client-input" }
@@ -85,6 +89,7 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 winresource = "0.1"
 
 [features]
+native-mods = ["dep:horizon-native-api", "dep:horizon-native-runtime", "dep:horizon-native-pack"]
 default = ["audio", "controllers"]
 # Sound output. Without it (and `controllers`) the program links neither libasound nor libudev on
 # Linux: the server build (`--no-default-features`, released as horizon-engine; docs/server.md).

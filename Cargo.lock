@@ -1393,6 +1393,9 @@ dependencies = [
  "horizon-hdr",
  "horizon-items",
  "horizon-mods",
+ "horizon-native-api",
+ "horizon-native-pack",
+ "horizon-native-runtime",
  "horizon-protocol",
  "horizon-server-files",
  "horizon-shader-api",
@@ -1578,6 +1581,32 @@ name = "horizon-mods-test-ui-guest"
 version = "0.1.0"
 dependencies = [
  "horizon-mod-sdk",
+]
+
+[[package]]
+name = "horizon-native-api"
+version = "0.1.0"
+
+[[package]]
+name = "horizon-native-hello-mod"
+version = "0.1.0"
+dependencies = [
+ "horizon-native-api",
+]
+
+[[package]]
+name = "horizon-native-pack"
+version = "0.1.0"
+dependencies = [
+ "horizon-native-hello-mod",
+ "horizon-native-runtime",
+]
+
+[[package]]
+name = "horizon-native-runtime"
+version = "0.1.0"
+dependencies = [
+ "horizon-native-api",
 ]
 
 [[package]]

@@ -121,6 +121,8 @@ mod moved_extras;
 mod moving_pistons;
 mod music;
 mod names;
+#[cfg(feature = "native-mods")]
+mod native_api;
 mod native_hooks;
 mod native_panel;
 mod native_panel_recipes;
@@ -1859,6 +1861,8 @@ struct Game<'a> {
     extras: extras::ExtrasState,
     /// Horizon mods (`game/mods.rs`), none running unless turned on.
     mods: mods::ModsState,
+    #[cfg(feature = "native-mods")]
+    _native_api: native_api::NativeRuntime,
     /// Every item and recipe, for mods (`game/native_recipes.rs`), made once.
     recipe_tables: native_recipes::RecipeTables,
     /// The item panel beside container screens (`game/native_panel.rs`).
@@ -14029,6 +14033,9 @@ impl<'a> Game<'a> {
         audio: Audio,
         prepared: Option<GameCpuResources>,
     ) -> Result<Self> {
+        #[cfg(feature = "native-mods")]
+        let native_api =
+            native_api::NativeRuntime::start(options.execution_role, options.server_thread)?;
         let root = options.resources.clone();
         let registry = pack.assets.registry;
         // Until a world is opened the streamer is idle.
@@ -14356,6 +14363,8 @@ impl<'a> Game<'a> {
             frame_graph: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            #[cfg(feature = "native-mods")]
+            _native_api: native_api,
             recipe_tables: Default::default(),
             panel: Default::default(),
             native_shaders: Default::default(),
