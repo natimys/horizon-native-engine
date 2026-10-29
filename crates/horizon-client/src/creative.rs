@@ -189,14 +189,24 @@ impl Creative {
     /// prepared before it fall back to `creative-tabs.json`'s item ids.
     pub fn load(root: &Path) -> Result<Self> {
         let path = root.join("creative-inventory.json");
-        if path.exists() {
-            Self::from_json(&serde_json::from_slice(&fs::read(path)?)?)
+        let mut creative = if path.exists() {
+            Self::from_json(&serde_json::from_slice(&fs::read(path)?)?)?
         } else {
             Self::from_legacy(&serde_json::from_slice(&fs::read(
                 root.join("creative-tabs.json"),
-            )?)?)
+            )?)?)?
+        };
+        let additions = root.join("creative-additions.json");
+        if additions.exists() {
+            let raw: Value = serde_json::from_slice(&fs::read(additions)?)?;
+            if !raw["tabs"].is_array() {
+                return Err("creative additions need tabs".into());
+            }
+            creative.append_tabs(Self::from_json(&raw)?.tabs)?;
         }
+        Ok(creative)
     }
+
     pub fn from_json(raw: &Value) -> Result<Self> {
         let mut tabs = Vec::new();
         let mut search_items = Vec::new();
@@ -857,6 +867,40 @@ mod tests {
             search: false,
             inventory: false,
         }
+    }
+
+    #[test]
+    fn loads_additive_categories_through_existing_search_and_layout() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-creative-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("creative-inventory.json"), r#"{"tabs":[{"id":"minecraft:search","type":"SEARCH","row":"TOP","column":0,"items":[]}]}"#).unwrap();
+        let baseline = Creative::load(&root).unwrap();
+        assert_eq!(baseline.tabs.len(), 1);
+        fs::write(root.join("creative-additions.json"), r#"{"tabs":[{"id":"beta:tools","title":"tab.beta.tools","icon":"{count:1,id:\"beta:gear\"}","items":["{count:1,id:\"beta:gear\"}"]},{"id":"alpha:tools","title":"tab.alpha.tools","icon":"{count:1,id:\"alpha:gear\"}","items":["{count:1,id:\"alpha:gear\"}"]}]}"#).unwrap();
+        let c = Creative::load(&root).unwrap();
+        assert_eq!(
+            c.tabs.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["minecraft:search", "alpha:tools", "beta:tools"]
+        );
+        let names = Names {
+            map: HashMap::from([("item.alpha.gear".into(), "Original Gear".into())]),
+        };
+        assert_eq!(c.search_results("original", &names).len(), 1);
+        assert_eq!(c.search_results("alpha:gear", &names).len(), 1);
+        fs::write(
+            root.join("creative-additions.json"),
+            r#"{"tabs":[{"id":"minecraft:search","type":"SEARCH"}]}"#,
+        )
+        .unwrap();
+        assert!(Creative::load(&root).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
