@@ -91,6 +91,10 @@ fn format_double(v: f64) -> String {
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
     pub(super) fn run_command(&mut self, command: &str) -> bool {
+        #[cfg(feature = "native-mods")]
+        if self.remote.is_none() && self.native_api_command(None, None, command) {
+            return true;
+        }
         if self.client_mod_command(command) {
             return true;
         }

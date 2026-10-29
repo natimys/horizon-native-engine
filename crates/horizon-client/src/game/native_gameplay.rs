@@ -259,7 +259,7 @@ impl Game<'_> {
     /// Namespaced zero-argument commands. Ownership is resolved by the runtime.
     pub(super) fn native_api_command(
         &mut self,
-        mut host: Option<&mut LanHost>,
+        host: Option<&mut LanHost>,
         conn: Option<u32>,
         line: &str,
     ) -> bool {
@@ -287,7 +287,7 @@ impl Game<'_> {
                 .as_deref()
                 .and_then(|h| h.hub.guest(conn))
                 .map(|g| g.uuid),
-            None => Some(self.player_uuid()),
+            None => Some(self.lan_acting_uuid.unwrap_or_else(|| self.player_uuid())),
         };
         let Some(player) = self
             .native_players(host.as_deref())
@@ -317,7 +317,7 @@ impl Game<'_> {
             }
             None => return false,
         }
-        self.apply_native_actions(host.as_deref_mut());
+        self.apply_native_actions(host);
         true
     }
 

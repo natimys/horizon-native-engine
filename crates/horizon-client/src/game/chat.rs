@@ -906,13 +906,13 @@ impl Game<'_> {
         }
         if self.remote.is_some() {
             self.send_chat(&format!("/{command}"));
-        } else if {
-            #[cfg(feature = "native-mods")]
-            if self.native_api_command(None, None, command) {
-                return;
-            }
-            !self.local_server_mod_command(command)
-        } {
+            return;
+        }
+        #[cfg(feature = "native-mods")]
+        if self.native_api_command(None, None, command) {
+            return;
+        }
+        if !self.local_server_mod_command(command) {
             self.run_command(command);
         }
     }

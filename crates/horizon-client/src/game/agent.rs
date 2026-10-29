@@ -341,6 +341,12 @@ impl Game<'_> {
             Some(Ticker::Shulker { .. }) => v["lid"] = json!(self.block_anim(pos, 1.0).shulker.0),
             _ => {}
         }
+        // Generic extension data, as this client received it (not a server query).
+        if let Some(horizon_client::containers::BlockEntity::Extension { id, version, data }) =
+            self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+        {
+            v["block_entity"] = json!({"id":id,"version":version,"fields":data});
+        }
         // The lines of a sign, as this client has them.
         if let Some(horizon_client::containers::BlockEntity::Sign(sign)) =
             self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
