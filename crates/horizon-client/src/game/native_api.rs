@@ -1,7 +1,11 @@
 //! Generic ownership bridge for the public-API native path. Independent of WASM/mixins.
 use super::execution_role::ExecutionRole;
-use horizon_native_api::ModAction;
+use horizon_native_api::{ContentSnapshot, ModAction};
 use horizon_native_runtime::{HostSide, Runtime};
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 /// Drop also runs on startup/loop errors. Mods never receive Game or engine handles.
 pub(super) struct NativeRuntime {
@@ -29,11 +33,23 @@ impl NativeRuntime {
         horizon_native_ui::ModListView::for_runtime(&self.runtime)
     }
 
+    #[cfg(test)]
     pub(super) fn start(role: ExecutionRole, server_thread: bool) -> super::Result<Self> {
+        let mut owner = Self::prepare(role, server_thread)?;
+        owner.initialize()?;
+        Ok(owner)
+    }
+
+    fn prepare(role: ExecutionRole, server_thread: bool) -> super::Result<Self> {
         let runtime = horizon_native_pack::create_for_side(host_side(role, server_thread))?;
         let mut owner = Self { runtime };
-        output(owner.runtime.initialize()?);
-        for metadata in owner.runtime.metadata() {
+        owner.runtime.freeze()?;
+        Ok(owner)
+    }
+
+    fn initialize(&mut self) -> super::Result<()> {
+        output(self.runtime.initialize()?);
+        for metadata in self.runtime.metadata() {
             log::info!(
                 "Native mod: {} {} ({})",
                 metadata.name,
@@ -41,6 +57,52 @@ impl NativeRuntime {
                 metadata.id
             );
         }
+        Ok(())
+    }
+}
+
+/// Shared resource declarations, with the first registered instance retained
+/// until Game setup. Each later Game owns its own side-scoped lifecycle.
+pub(super) struct NativeResources {
+    content: ContentSnapshot,
+    prepared: Mutex<Option<NativeRuntime>>,
+}
+impl NativeResources {
+    pub(super) fn prepare(role: ExecutionRole, server_thread: bool) -> super::Result<Self> {
+        let owner = NativeRuntime::prepare(role, server_thread)?;
+        Ok(Self {
+            content: owner.runtime.content().clone(),
+            prepared: Mutex::new(Some(owner)),
+        })
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.content == ContentSnapshot::default()
+    }
+    pub(super) fn resource_root(&self, base: &Path) -> super::Result<PathBuf> {
+        horizon_client::native_content::resource_root(
+            base,
+            &self.content,
+            &std::env::current_dir()?.join(".horizon-cache/native"),
+        )
+    }
+    pub(super) fn start(
+        &self,
+        role: ExecutionRole,
+        server_thread: bool,
+    ) -> super::Result<NativeRuntime> {
+        let prepared = self
+            .prepared
+            .lock()
+            .map_err(|_| "native preparation lock poisoned")?
+            .take();
+        let mut owner = match prepared {
+            Some(owner) if owner.runtime.host_side() == host_side(role, server_thread) => owner,
+            Some(_) | None => NativeRuntime::prepare(role, server_thread)?,
+        };
+        if owner.runtime.content() != &self.content {
+            return Err("native registration differs from the frozen resource catalog".into());
+        }
+        owner.initialize()?;
         Ok(owner)
     }
 }
@@ -58,6 +120,48 @@ impl Drop for NativeRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_preparation_defers_setup_and_serves_each_execution_role() {
+        let resources = NativeResources::prepare(ExecutionRole::Client, true).unwrap();
+        assert_eq!(
+            resources
+                .prepared
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .runtime
+                .state(),
+            horizon_native_runtime::State::Frozen
+        );
+        let client = resources.start(ExecutionRole::Client, true).unwrap();
+        assert!(resources.prepared.lock().unwrap().is_none());
+        assert_eq!(
+            client.runtime.state(),
+            horizon_native_runtime::State::Running
+        );
+        let server = resources
+            .start(ExecutionRole::IntegratedServer, true)
+            .unwrap();
+        assert_eq!(server.runtime.host_side(), HostSide::Server);
+        assert_eq!(client.runtime.content(), server.runtime.content());
+    }
+
+    #[test]
+    fn inconsistent_later_registration_cannot_open_a_world() {
+        let mut resources =
+            NativeResources::prepare(ExecutionRole::DedicatedServer, false).unwrap();
+        resources
+            .content
+            .resources
+            .insert("assets/unknown/mismatch".into(), vec![]);
+        assert!(
+            resources
+                .start(ExecutionRole::DedicatedServer, false)
+                .is_err()
+        );
+    }
 
     #[test]
     fn fixed_execution_roles_select_runtime_sides() {

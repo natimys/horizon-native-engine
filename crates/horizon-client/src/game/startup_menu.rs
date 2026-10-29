@@ -217,6 +217,8 @@ pub(super) fn spawn_loader(
     let settings = settings.clone();
     let vanilla_root = vanilla_root.to_path_buf();
     let dev_mods = options.dev_mods.clone();
+    let native_role = options.execution_role;
+    let native_server_thread = options.server_thread;
     let progress = progress.clone();
     let handle = std::thread::Builder::new()
         .name("resource-loader".into())
@@ -238,6 +240,8 @@ pub(super) fn spawn_loader(
                 &mut |gui, root| {
                     let _ = sender.send(LoaderMsg::Ui(gui, root.to_path_buf()));
                 },
+                native_role,
+                native_server_thread,
             )
             .map(|mut loaded| {
                 loaded.pack_error = loaded.pack_error.or(pack_error);

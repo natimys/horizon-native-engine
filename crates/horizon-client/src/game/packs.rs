@@ -284,6 +284,8 @@ pub(super) fn stage_pack(
 ) -> horizon_client::Result<StagedPack> {
     let root = startup_root(vanilla_root, selected, server)?;
     let root = super::mods::content_root(&root, mods_enabled, dev_mods);
+    #[cfg(feature = "native-mods")]
+    let root = res.native.resource_root(&root)?;
     progress.set(1);
     let render = Arc::new(assets.reload(&root)?);
     let mut atlas = HudAtlas::build_over(&root, vanilla_root)?;

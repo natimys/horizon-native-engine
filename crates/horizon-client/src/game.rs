@@ -1177,6 +1177,8 @@ struct FallingBlock {
 /// recipes, biomes, mobs, collision and motion. Read-only and `Send + Sync`,
 /// so the client and an integrated server thread can share one copy.
 pub struct Resources {
+    #[cfg(feature = "native-mods")]
+    native: native_api::NativeResources,
     core: WorldCore,
     rest: std::sync::OnceLock<WorldRest>,
 }
@@ -11359,8 +11361,10 @@ impl Game<'_> {
     }
     /// A creative tab's title: `itemGroup.*`, else the export's English title.
     fn creative_tab_title(&self, tab: &horizon_client::creative::Tab) -> String {
-        horizon_client::creative::item_group_key(&tab.id)
-            .map_or_else(|| tab.title.clone(), |key| self.translate(key, &tab.title))
+        horizon_client::creative::item_group_key(&tab.id).map_or_else(
+            || self.translate(&tab.title, &tab.title),
+            |key| self.translate(key, &tab.title),
+        )
     }
     /// Vanilla tooltip: dark box with a purple gradient border.
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
@@ -14036,8 +14040,9 @@ impl<'a> Game<'a> {
         prepared: Option<GameCpuResources>,
     ) -> Result<Self> {
         #[cfg(feature = "native-mods")]
-        let native_api =
-            native_api::NativeRuntime::start(options.execution_role, options.server_thread)?;
+        let native_api = res
+            .native
+            .start(options.execution_role, options.server_thread)?;
         let root = options.resources.clone();
         let registry = pack.assets.registry;
         // Until a world is opened the streamer is idle.
@@ -14744,7 +14749,18 @@ fn load_resources(
     menu: bool,
     progress: &Progress,
     publish: &mut dyn FnMut(UiResources, &std::path::Path),
+    _role: execution_role::ExecutionRole,
+    _server_thread: bool,
 ) -> Result<Loaded> {
+    #[cfg(feature = "native-mods")]
+    let native = native_api::NativeResources::prepare(_role, _server_thread)?;
+    #[cfg(feature = "native-mods")]
+    {
+        root = native.resource_root(&root)?;
+    }
+    let allow_fallback = root != vanilla_root;
+    #[cfg(feature = "native-mods")]
+    let allow_fallback = allow_fallback && native.is_empty();
     let requested_root = root.clone();
     let threads = settings.horizon.worker_threads();
     // Stage A: the menu bundle (atlas and panorama). With a loading screen it is
@@ -14757,7 +14773,7 @@ fn load_resources(
         Ok(ui) => Some(ui),
         // Minecraft.rollbackResourcePacks: the packs' textures don't fit, start
         // with the game's own resources.
-        Err(e) if root != vanilla_root => {
+        Err(e) if root != vanilla_root && allow_fallback => {
             log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
             pack_error = Some(e.to_string());
             root = vanilla_root.to_path_buf();
@@ -14786,7 +14802,7 @@ fn load_resources(
         Ok(bundle) => bundle,
         // Minecraft.rollbackResourcePacks: the packs break loading, start
         // with the game's own resources.
-        Err(e) if root != vanilla_root => {
+        Err(e) if root != vanilla_root && allow_fallback => {
             log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
             pack_error = Some(e.to_string());
             root = vanilla_root.to_path_buf();
@@ -14873,6 +14889,8 @@ fn load_resources(
     );
     progress.set(5);
     let resources = Resources {
+        #[cfg(feature = "native-mods")]
+        native,
         core: WorldCore {
             facts,
             biomes: biomes.clone(),
@@ -15852,6 +15870,8 @@ pub fn run() -> Result<()> {
         false,
         &Progress::new(),
         &mut |_, _| {},
+        options.execution_role,
+        options.server_thread,
     )?;
     let gui = loaded.gui.ok_or("missing menu bundle")?;
     options.resources = loaded.root.clone();
