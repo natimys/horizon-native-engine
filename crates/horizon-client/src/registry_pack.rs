@@ -82,3 +82,112 @@ mod tests {
         assert!(confirm(None, &[]).is_ok());
     }
 }
+
+/// Stable world requirements; protocol numbers and resource paths are excluded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorldContent {
+    pub items: std::collections::BTreeSet<String>,
+    pub blocks: std::collections::BTreeSet<String>,
+    pub block_entities: std::collections::BTreeMap<String, u32>,
+}
+const WORLD_FILE: &str = "horizon-required-content.json";
+fn requirements(resources: &Path) -> Result<WorldContent, String> {
+    let marker = resources.join(FILE);
+    if !marker.exists() {
+        return Ok(WorldContent::default());
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&marker).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    value.get("required").map_or_else(
+        || Ok(WorldContent::default()),
+        |v| serde_json::from_value(v.clone()).map_err(|e| e.to_string()),
+    )
+}
+/// Read-only check before migrations or decoding chunks, including feature-off builds.
+pub fn check_world(resources: &Path, world: &Path) -> Result<(), String> {
+    let path = world.join(WORLD_FILE);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let saved: WorldContent =
+        serde_json::from_slice(&bytes).map_err(|e| format!("world content requirements: {e}"))?;
+    let current = requirements(resources)?;
+    if !saved.items.is_subset(&current.items)
+        || !saved.blocks.is_subset(&current.blocks)
+        || saved
+            .block_entities
+            .iter()
+            .any(|(id, version)| current.block_entities.get(id) != Some(version))
+    {
+        return Err("World content mismatch: rebuild with the world's required items, blocks and block entity schema versions before opening it".into());
+    }
+    Ok(())
+}
+/// Called only while holding the world's ordinary session lock. Additions may
+/// change protocol order; only persistent names/schema versions are recorded.
+pub fn record_world(resources: &Path, world: &Path) -> Result<(), String> {
+    check_world(resources, world)?;
+    let current = requirements(resources)?;
+    if current == WorldContent::default() {
+        return Ok(());
+    }
+    let bytes = serde_json::to_vec(&current).map_err(|e| e.to_string())?;
+    let path = world.join(WORLD_FILE);
+    if std::fs::read(&path).is_ok_and(|old| old == bytes) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(world).map_err(|e| e.to_string())?;
+    let temporary = world.join(format!("{WORLD_FILE}.tmp"));
+    std::fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(temporary, path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod world_tests {
+    use super::*;
+    #[test]
+    fn saved_names_accept_additions_and_refuse_missing_content_or_changed_schema() {
+        let scratch = std::env::temp_dir().join(format!(
+            "horizon-world-requirements-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let resources = scratch.join("resources");
+        let world = scratch.join("world");
+        std::fs::create_dir_all(&resources).unwrap();
+        check_world(&resources, &world).unwrap();
+        record_world(&resources, &world).unwrap();
+        assert!(!world.join(WORLD_FILE).exists());
+        let mut content = WorldContent::default();
+        content.blocks.insert("a:counter".into());
+        content.items.insert("a:counter".into());
+        content.block_entities.insert("a:data".into(), 1);
+        let write = |content: &WorldContent| {
+            std::fs::write(
+                resources.join(FILE),
+                serde_json::to_vec(&serde_json::json!({"required":content})).unwrap(),
+            )
+            .unwrap()
+        };
+        write(&content);
+        record_world(&resources, &world).unwrap();
+        let saved = std::fs::read(world.join(WORLD_FILE)).unwrap();
+        content.items.insert("b:new".into());
+        write(&content);
+        check_world(&resources, &world).unwrap();
+        content.block_entities.insert("a:data".into(), 2);
+        write(&content);
+        assert!(record_world(&resources, &world).is_err());
+        assert_eq!(std::fs::read(world.join(WORLD_FILE)).unwrap(), saved);
+        std::fs::remove_file(resources.join(FILE)).unwrap();
+        assert!(check_world(&resources, &world).is_err());
+        std::fs::remove_dir_all(scratch).unwrap();
+    }
+}

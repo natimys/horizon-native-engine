@@ -60,9 +60,11 @@ impl WorldRequest {
         } = self;
         let name = name.as_deref();
         let create = create.as_ref();
+        horizon_client::registry_pack::check_world(&options.resources, &save_root)?;
         horizon_client::save::upgrade_older_world(&save_root)?;
         horizon_client::save::migrate_legacy(&save_root)?;
         let session_lock = horizon_client::save::SessionLock::acquire(&save_root)?;
+        horizon_client::registry_pack::record_world(&options.resources, &save_root)?;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         let rand_sequences =
             horizon_client::save::read_dat(&save_root.join("data/minecraft/random_sequences.dat"))

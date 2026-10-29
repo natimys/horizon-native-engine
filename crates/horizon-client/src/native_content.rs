@@ -245,14 +245,18 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
         let entries = registries["minecraft:block_entity_type"]["entries"]
             .as_object_mut()
             .ok_or("missing block entity registry")?;
-        let mut next = entries
+        let next = entries
             .values()
             .filter_map(|v| v["protocol_id"].as_i64())
             .max()
             .unwrap_or(-1)
             + 1;
         let mut mapping = serde_json::Map::new();
-        for entity in content.block_entities.values() {
+        for (offset, entity) in content.block_entities.values().enumerate() {
+            let next = next + offset as i64;
+            if next > i64::from(i16::MAX) {
+                return Err("block entity type capacity exceeded".into());
+            }
             if !content.blocks.contains_key(&entity.block) {
                 return Err("block entity needs a registered native block".into());
             }
@@ -274,7 +278,6 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
             }
             entries.insert(entity.id.to_string(), json!({"protocol_id":next}));
             mapping.insert(entity.block.to_string(), json!({"protocol_id":next}));
-            next += 1;
         }
         registries["horizon:extension_block_entity"] = json!({"entries":mapping});
         write(&root, "registries.json", &serde_json::to_vec(&registries)?)?;
@@ -303,7 +306,13 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
     write(
         &root,
         crate::registry_pack::FILE,
-        &serde_json::to_vec(&json!({"sha256":format!("{:x}",identity.finalize())}))?,
+        &serde_json::to_vec(
+            &json!({"sha256":format!("{:x}",identity.finalize()),"required":crate::registry_pack::WorldContent {
+                items:content.items.keys().chain(content.blocks.keys()).map(ToString::to_string).collect(),
+                blocks:content.blocks.keys().map(ToString::to_string).collect(),
+                block_entities:content.block_entities.values().map(|e|(e.id.to_string(),e.version)).collect(),
+            }}),
+        )?,
     )?;
     if !content.recipes.is_empty() {
         let items = crate::items::Items::catalog(&root)?;
