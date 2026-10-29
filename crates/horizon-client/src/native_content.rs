@@ -52,6 +52,23 @@ fn validate(root: &Path, content: &ContentSnapshot) -> Result<()> {
             return Err(format!("{id}: missing vanilla template {}", item.template).into());
         }
     }
+    let facts = json_file(&root.join("facts.json"))?;
+    for block in content.blocks.values() {
+        if facts["defaults"].get(block.id.as_str()).is_some()
+            || items.get(block.id.as_str()).is_some()
+        {
+            return Err(format!("block/item ID collision: {}", block.id).into());
+        }
+        if block.template.namespace() != "minecraft"
+            || facts["defaults"].get(block.template.as_str()).is_none()
+        {
+            return Err(format!(
+                "{}: missing vanilla block template {}",
+                block.id, block.template
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -125,6 +142,22 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
             return Err("native resource attempts to redefine a declaration".into());
         }
     }
+    for block in content.blocks.values() {
+        let path = format!(
+            "data/{}/horizon/block/{}.json",
+            block.id.namespace(),
+            block.id.as_str().split_once(':').expect("validated ID").1
+        );
+        if files
+            .insert(
+                path,
+                serde_json::to_vec(&json!({"template":block.template.as_str()}))?,
+            )
+            .is_some()
+        {
+            return Err("native resource attempts to redefine a block declaration".into());
+        }
+    }
     let mut hash = Sha256::new();
     for (path, bytes) in &files {
         hash.update((path.len() as u64).to_le_bytes());
@@ -135,6 +168,7 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
     // Tab/title changes also invalidate the derived overlay.
     hash.update(format!("{:?}", content.tabs));
     hash.update(format!("{:?}", content.items));
+    hash.update(format!("{:?}", content.blocks));
     let mut identity = hash.clone();
     hash.update(std::path::absolute(base)?.to_string_lossy().as_bytes());
     let cache = cache.join(format!("{:x}", hash.finalize()));
@@ -228,6 +262,17 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
                 );
             }
         }
+        for block in content
+            .blocks
+            .values()
+            .filter(|b| b.id.namespace() == owner)
+        {
+            if let Some(name) = strings.get(&block.translation_key).cloned() {
+                let key = block.id.as_str().replacen(':', ".", 1).replace('/', ".");
+                strings.insert(format!("block.{key}"), name.clone());
+                strings.insert(format!("item.{key}"), name);
+            }
+        }
         write(&root, path, &serde_json::to_vec(&strings)?)?;
     }
     for (owner, key) in content
@@ -246,6 +291,14 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
             .is_some_and(|strings| strings.contains_key(key))
         {
             return Err(format!("missing English translation in {owner}: {key}").into());
+        }
+    }
+    for block in content.blocks.values() {
+        if !english
+            .get(block.id.namespace())
+            .is_some_and(|strings| strings.contains_key(&block.translation_key))
+        {
+            return Err(format!("missing English block translation: {}", block.id).into());
         }
     }
     validate_models(&root, content)?;

@@ -340,3 +340,72 @@ fn native_overlay_preserves_existing_content_namespaces_and_vanilla_inventory() 
     // The derived marker write must not follow the base marker's overlay link.
     assert_eq!(mod_content::namespaces(&fixture.base()), ["legacy"]);
 }
+
+#[test]
+fn blocks_use_existing_state_item_and_protocol_tables() {
+    let fixture = Fixture::new();
+    let base = fixture.base();
+    for (path, value) in [
+        (
+            "facts.json",
+            json!({"states":[["minecraft:stone"]],"defaults":{"minecraft:stone":0}}),
+        ),
+        (
+            "gameplay-facts.json",
+            json!({"states":[{"id":0,"name":"minecraft:stone","item":"minecraft:stone"}]}),
+        ),
+        (
+            "items.json",
+            json!({"minecraft:stone":{"minecraft:max_stack_size":64,"minecraft:item_name":{"translate":"block.minecraft.stone"}}}),
+        ),
+        (
+            "registries.json",
+            json!({"minecraft:item":{"entries":{"minecraft:stone":{"protocol_id":0}}},"minecraft:block":{"entries":{"minecraft:stone":{"protocol_id":0}}}}),
+        ),
+        (
+            "command-registries.json",
+            json!({"items":["minecraft:stone"],"blocks":{"minecraft:stone":{}}}),
+        ),
+    ] {
+        write(&base, path, &serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+    write(
+        &base,
+        "assets/minecraft/blockstates/stone.json",
+        br#"{"variants":{"":{"model":"minecraft:block/stone"}}}"#,
+    )
+    .unwrap();
+    let mut c = ContentSnapshot::default();
+    let id: ResourceId = "tiles:tile".parse().unwrap();
+    c.blocks.insert(
+        id.clone(),
+        horizon_native_api::BlockDescriptor {
+            id,
+            template: "minecraft:stone".parse().unwrap(),
+            translation_key: "label.tile".into(),
+        },
+    );
+    c.resources.insert(
+        "assets/tiles/lang/en_us.json".into(),
+        br#"{"label.tile":"Tile"}"#.to_vec(),
+    );
+    let root = fixture.root(&c).unwrap();
+    assert_eq!(
+        json_file(&root.join("facts.json")).unwrap()["defaults"]["tiles:tile"],
+        1
+    );
+    let builtin = horizon_protocol::registry::Builtin::load(&root.join("registries.json")).unwrap();
+    for registry in ["minecraft:block", "minecraft:item"] {
+        assert_eq!(
+            builtin.get(registry).unwrap().id("minecraft:stone"),
+            Some(0)
+        );
+        assert_eq!(builtin.get(registry).unwrap().id("tiles:tile"), Some(1));
+    }
+    assert_eq!(
+        json_file(&root.join("assets/tiles/lang/en_us.json")).unwrap()["block.tiles.tile"],
+        "Tile"
+    );
+    c.blocks.values_mut().next().unwrap().template = "minecraft:missing".parse().unwrap();
+    assert!(fixture.root(&c).is_err());
+}
