@@ -17,7 +17,8 @@ impl Game<'_> {
     fn native_authority(&self) -> bool {
         self.remote.is_none()
             && !self._native_api.gameplay.failed
-            && self._native_api.runtime.has_gameplay_subscribers()
+            && (self._native_api.runtime.has_gameplay_subscribers()
+                || self._native_api.runtime.has_commands())
     }
 
     fn native_players(&self, host: Option<&LanHost>) -> Vec<PlayerSnapshot> {
@@ -166,6 +167,63 @@ impl Game<'_> {
             });
         }
         self.apply_native_actions(None);
+    }
+
+    /// Namespaced zero-argument commands. Ownership is resolved by the runtime.
+    pub(super) fn native_api_command(
+        &mut self,
+        mut host: Option<&mut LanHost>,
+        conn: Option<u32>,
+        line: &str,
+    ) -> bool {
+        if !self.native_authority() {
+            return false;
+        }
+        let mut words = line.split_whitespace();
+        let Some(name) = words.next() else {
+            return false;
+        };
+        let Ok(id) = name.parse::<horizon_native_api::ResourceId>() else {
+            return false;
+        };
+        if !self
+            ._native_api
+            .runtime
+            .content()
+            .commands
+            .contains_key(&id)
+        {
+            return false;
+        }
+        let player_id = match conn {
+            Some(conn) => host
+                .as_deref()
+                .and_then(|h| h.hub.guest(conn))
+                .map(|g| g.uuid),
+            None => Some(self.player_uuid()),
+        };
+        let Some(player) = self
+            .native_players(host.as_deref())
+            .into_iter()
+            .find(|p| Some(p.id) == player_id)
+        else {
+            return true;
+        };
+        if words.next().is_some() {
+            self.native_tell(host, player.id, format!("/{id} takes no arguments"));
+            return true;
+        }
+        match self._native_api.runtime.command(&id, &player) {
+            Some(Ok(actions)) => self._native_api.gameplay.actions.extend(actions),
+            Some(Err(error)) => {
+                log::error!("{error}");
+                self._native_api.gameplay.actions.clear();
+                self._native_api.gameplay.failed = true;
+            }
+            None => return false,
+        }
+        self.apply_native_actions(host.as_deref_mut());
+        true
     }
 
     pub(super) fn native_tell(&mut self, host: Option<&mut LanHost>, id: u128, text: String) {

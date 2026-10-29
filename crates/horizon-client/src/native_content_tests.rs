@@ -444,3 +444,38 @@ fn registered_recipe_crafts_through_ordinary_loader_and_refuses_unknown_items() 
     c.recipes.values_mut().next().unwrap().ingredients[0] = "minecraft:missing".parse().unwrap();
     assert!(fixture.root(&c).is_err());
 }
+
+#[test]
+fn native_commands_reuse_existing_report_and_refuse_collisions() {
+    let fixture = Fixture::new();
+    write(
+        &fixture.base(),
+        "commands.json",
+        br#"{"type":"root","children":{"say":{"type":"literal","executable":true}}}"#,
+    )
+    .unwrap();
+    let mut content = ContentSnapshot::default();
+    let id: ResourceId = "commands:ping".parse().unwrap();
+    content
+        .commands
+        .insert(id.clone(), horizon_native_api::CommandDescriptor { id });
+    let root = fixture.root(&content).unwrap();
+    let report = json_file(&root.join("commands.json")).unwrap();
+    assert!(report["children"]["say"].is_object());
+    assert_eq!(report["children"]["commands:ping"]["executable"], true);
+    let tree = crate::lan::commands::CommandTree::load(&root).unwrap();
+    let builtin = horizon_protocol::registry::Builtin::load(&root.join("registries.json")).unwrap();
+    assert!(
+        tree.packet(0, false, &builtin)
+            .nodes
+            .iter()
+            .any(|n| n.name == "commands:ping" && n.executable)
+    );
+    write(
+        &fixture.base(),
+        "commands.json",
+        br#"{"type":"root","children":{"commands:ping":{"type":"literal"}}}"#,
+    )
+    .unwrap();
+    assert!(fixture.root(&content).is_err());
+}

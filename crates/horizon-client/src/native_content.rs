@@ -126,6 +126,14 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
     }
     validate(base, content)?;
     let mut files = content.resources.clone();
+    for command in content.commands.values() {
+        files
+            .entry(format!(
+                "data/{}/native/commands.json",
+                command.id.namespace()
+            ))
+            .or_insert_with(|| b"{}".to_vec());
+    }
     for item in content.items.values() {
         let path = format!(
             "data/{}/horizon/item/{}.json",
@@ -179,6 +187,7 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
     hash.update(format!("{:?}", content.tabs));
     hash.update(format!("{:?}", content.items));
     hash.update(format!("{:?}", content.blocks));
+    hash.update(format!("{:?}", content.commands));
     let mut identity = hash.clone();
     hash.update(std::path::absolute(base)?.to_string_lossy().as_bytes());
     let cache = cache.join(format!("{:x}", hash.finalize()));
@@ -229,6 +238,24 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
         return Err("creative declarations require registered content".into());
     }
     let root = mod_content::resource_root(base, &mods, &cache)?;
+    if !content.commands.is_empty() {
+        let mut tree = json_file(&base.join("commands.json"))?;
+        let children = tree["children"]
+            .as_object_mut()
+            .ok_or("commands.json: missing root children")?;
+        for command in content.commands.values() {
+            if children
+                .insert(
+                    command.id.to_string(),
+                    json!({"type":"literal","executable":true}),
+                )
+                .is_some()
+            {
+                return Err(format!("command collision: {}", command.id).into());
+            }
+        }
+        write(&root, "commands.json", &serde_json::to_vec(&tree)?)?;
+    }
     identity.update(serde_json::to_vec(&json_file(
         &root.join("registries.json"),
     )?)?);

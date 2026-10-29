@@ -708,6 +708,10 @@ impl Game<'_> {
         }
         if let Some(command) = message.strip_prefix('/') {
             // A client mod's command first, then a server mod's, as on a server.
+            #[cfg(feature = "native-mods")]
+            if self.native_api_command(None, None, command) {
+                return;
+            }
             if !self.client_mod_command(command) && !self.local_server_mod_command(command) {
                 self.run_command(command);
             }
@@ -902,7 +906,13 @@ impl Game<'_> {
         }
         if self.remote.is_some() {
             self.send_chat(&format!("/{command}"));
-        } else if !self.local_server_mod_command(command) {
+        } else if {
+            #[cfg(feature = "native-mods")]
+            if self.native_api_command(None, None, command) {
+                return;
+            }
+            !self.local_server_mod_command(command)
+        } {
             self.run_command(command);
         }
     }

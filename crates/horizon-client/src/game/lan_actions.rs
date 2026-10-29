@@ -1892,6 +1892,10 @@ impl Game<'_> {
             );
             return;
         }
+        #[cfg(feature = "native-mods")]
+        if self.native_api_command(Some(host), Some(conn), command.trim_start_matches('/')) {
+            return;
+        }
         // A server mod's command, for every player whatever their level.
         if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
             return;
