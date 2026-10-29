@@ -125,6 +125,8 @@ mod names;
 mod native_api;
 #[cfg(feature = "native-mods")]
 mod native_catalog;
+#[cfg(feature = "native-mods")]
+mod native_gameplay;
 mod native_hooks;
 mod native_panel;
 mod native_panel_recipes;
@@ -4177,6 +4179,8 @@ impl Game<'_> {
         });
         if removed {
             self.mod_block_event(pos, broken, false);
+            #[cfg(feature = "native-mods")]
+            self.native_api_block_event(pos, broken, false);
         }
         if removed && !creative {
             let held = self.held().cloned();
@@ -4641,6 +4645,8 @@ impl Game<'_> {
         let target = [pos.x, pos.y, pos.z];
         let state = self.apply_item_block_state(target, state, &stack)?;
         self.mod_block_event(target, state, true);
+        #[cfg(feature = "native-mods")]
+        self.native_api_block_event(target, state, true);
         if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
             let key = (target[0], target[1], target[2]);
             self.world.block_entities.insert(key, entity);
@@ -5726,6 +5732,8 @@ impl Game<'_> {
             self.use_with_hand()?;
             self.use_delay = 4;
         }
+        #[cfg(feature = "native-mods")]
+        self.tick_native_gameplay(running);
         Ok(())
     }
     /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
@@ -9660,6 +9668,10 @@ impl Game<'_> {
         self.begin_closing_save(false)
     }
     fn finish_close_world(&mut self) -> Result<()> {
+        #[cfg(feature = "native-mods")]
+        {
+            self._native_api.gameplay = Default::default();
+        }
         self.ambience.clear(&mut self.audio);
         // updateLevelInEngines(null): every sound stops; the music manager
         // lets go of its track.

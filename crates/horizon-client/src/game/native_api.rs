@@ -9,7 +9,8 @@ use std::{
 
 /// Drop also runs on startup/loop errors. Mods never receive Game or engine handles.
 pub(super) struct NativeRuntime {
-    runtime: Runtime,
+    pub(super) runtime: Runtime,
+    pub(super) gameplay: super::native_gameplay::GameplayState,
 }
 
 fn host_side(role: ExecutionRole, server_thread: bool) -> HostSide {
@@ -42,7 +43,10 @@ impl NativeRuntime {
 
     fn prepare(role: ExecutionRole, server_thread: bool) -> super::Result<Self> {
         let runtime = horizon_native_pack::create_for_side(host_side(role, server_thread))?;
-        let mut owner = Self { runtime };
+        let mut owner = Self {
+            runtime,
+            gameplay: Default::default(),
+        };
         owner.runtime.freeze()?;
         Ok(owner)
     }
@@ -223,6 +227,7 @@ mod tests {
         ) -> Result<NativeRuntime, horizon_native_runtime::LoaderError> {
             let mut owner = NativeRuntime {
                 runtime: Runtime::new(vec![Box::new(Fails(count))])?,
+                gameplay: Default::default(),
             };
             owner.runtime.initialize()?;
             Ok(owner)
