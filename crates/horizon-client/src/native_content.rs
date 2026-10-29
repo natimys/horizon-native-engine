@@ -201,13 +201,11 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
         "horizon-mod-content.json",
         &serde_json::to_vec(&namespaces)?,
     )?;
-    let mut english = BTreeMap::<String, String>::new();
+    let mut english = BTreeMap::<String, BTreeMap<String, String>>::new();
     for ns in &namespaces {
         let path = root.join(format!("assets/{ns}/lang/en_us.json"));
         if path.exists() {
-            english.extend(serde_json::from_slice::<BTreeMap<String, String>>(
-                &fs::read(path)?,
-            )?);
+            english.insert(ns.clone(), serde_json::from_slice(&fs::read(path)?)?);
         }
     }
     // Names uses canonical item keys. Alias a descriptor's arbitrary key in each
@@ -232,14 +230,22 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
         }
         write(&root, path, &serde_json::to_vec(&strings)?)?;
     }
-    for key in content
+    for (owner, key) in content
         .items
         .values()
-        .map(|i| &i.translation_key)
-        .chain(content.tabs.values().map(|t| &t.translation_key))
+        .map(|i| (i.id.namespace(), &i.translation_key))
+        .chain(
+            content
+                .tabs
+                .values()
+                .map(|t| (t.id.namespace(), &t.translation_key)),
+        )
     {
-        if !english.contains_key(key) {
-            return Err(format!("missing English translation: {key}").into());
+        if !english
+            .get(owner)
+            .is_some_and(|strings| strings.contains_key(key))
+        {
+            return Err(format!("missing English translation in {owner}: {key}").into());
         }
     }
     validate_models(&root, content)?;

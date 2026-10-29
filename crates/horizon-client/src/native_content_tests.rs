@@ -163,6 +163,7 @@ fn missing_resources_templates_and_collisions_refuse_activation() {
         "translation",
         "collision",
         "namespace",
+        "foreign translation",
     ] {
         let fixture = Fixture::new();
         let mut c = pair(false);
@@ -189,6 +190,9 @@ fn missing_resources_templates_and_collisions_refuse_activation() {
                     &serde_json::to_vec(&items).unwrap(),
                 )
                 .unwrap();
+            }
+            "foreign translation" => {
+                c.items.values_mut().next().unwrap().translation_key = "label.beta".into();
             }
             "namespace" => {
                 write(&fixture.base(), "horizon-mod-content.json", b"[\"alpha\"]").unwrap()
