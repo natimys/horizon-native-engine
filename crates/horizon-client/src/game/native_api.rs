@@ -25,6 +25,10 @@ fn output(actions: Vec<ModAction>) {
 }
 
 impl NativeRuntime {
+    pub(super) fn catalog(&self) -> Option<horizon_native_ui::ModListView> {
+        horizon_native_ui::ModListView::for_runtime(&self.runtime)
+    }
+
     pub(super) fn start(role: ExecutionRole, server_thread: bool) -> super::Result<Self> {
         let runtime = horizon_native_pack::create_for_side(host_side(role, server_thread))?;
         let mut owner = Self { runtime };

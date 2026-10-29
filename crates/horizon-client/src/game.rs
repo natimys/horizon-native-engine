@@ -123,6 +123,8 @@ mod music;
 mod names;
 #[cfg(feature = "native-mods")]
 mod native_api;
+#[cfg(feature = "native-mods")]
+mod native_catalog;
 mod native_hooks;
 mod native_panel;
 mod native_panel_recipes;

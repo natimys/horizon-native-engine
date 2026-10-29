@@ -98,6 +98,11 @@ impl Game<'_> {
         // Gameplay keys must not stay held behind the options screen, where
         // bindings can also change before the physical key is released.
         self.keys.clear();
+        #[cfg(feature = "native-mods")]
+        {
+            self.settings.mods.catalog =
+                super::native_catalog::rows(self._native_api.catalog(), &self.gui.atlas.font);
+        }
         self.screen = Screen::Options;
         self.options_from_title = from_title;
         let ui = &mut self.ui.options;
