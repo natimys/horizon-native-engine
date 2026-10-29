@@ -98,7 +98,66 @@ fn pair(reverse: bool) -> ContentSnapshot {
             (format!("assets/{owner}/lang/ru_ru.json"), serde_json::to_vec(&json!({format!("label.{owner}"):"Шестерня",format!("tab.{owner}"):"Инструменты"})).unwrap()),
         ] { snapshot.resources.insert(path,bytes); }
     }
-    snapshot
+    // Each independent producer contributes exclusively through the public API.
+    static ALPHA: horizon_native_api::ModMetadata = horizon_native_api::ModMetadata {
+        id: "alpha",
+        name: "Alpha",
+        version: "1",
+        description: "",
+        authors: &[],
+        license: "MIT",
+        api_version: horizon_native_api::API_VERSION,
+        side: horizon_native_api::ModSide::Common,
+        dependencies: &[],
+    };
+    static BETA: horizon_native_api::ModMetadata = horizon_native_api::ModMetadata {
+        id: "beta",
+        name: "Beta",
+        ..ALPHA
+    };
+    struct Producer(&'static horizon_native_api::ModMetadata, ContentSnapshot);
+    impl horizon_native_api::NativeMod for Producer {
+        fn metadata(&self) -> &'static horizon_native_api::ModMetadata {
+            self.0
+        }
+        fn register(
+            &mut self,
+            c: &mut horizon_native_api::LoadContext,
+        ) -> std::result::Result<(), String> {
+            for item in self
+                .1
+                .items
+                .values()
+                .filter(|i| i.id.namespace() == self.0.id)
+            {
+                c.register_item(item.clone());
+            }
+            for tab in self
+                .1
+                .tabs
+                .values()
+                .filter(|t| t.id.namespace() == self.0.id)
+            {
+                c.register_tab(tab.clone());
+            }
+            for (path, bytes) in &self.1.resources {
+                if path.split('/').nth(1) == Some(self.0.id) {
+                    c.register_resource(path.clone(), bytes.clone());
+                }
+            }
+            Ok(())
+        }
+    }
+    let mut mods: Vec<Box<dyn horizon_native_api::NativeMod>> = vec![
+        Box::new(Producer(&ALPHA, snapshot.clone())),
+        Box::new(Producer(&BETA, snapshot)),
+    ];
+    if reverse {
+        mods.reverse();
+    }
+    let mut runtime = horizon_native_runtime::Runtime::new(mods).unwrap();
+    runtime.freeze().unwrap();
+    runtime.content().clone()
 }
 
 #[test]
@@ -229,4 +288,55 @@ fn static_pack_identity_ignores_cache_paths_and_registration_order() {
         .insert("assets/alpha/lang/ru_ru.json".into(), b"{}".to_vec());
     let changed = b.root(&changed).unwrap();
     assert_ne!(Some(first), crate::registry_pack::load(&changed).unwrap());
+}
+
+#[test]
+fn native_overlay_preserves_existing_content_namespaces_and_vanilla_inventory() {
+    let fixture = Fixture::new();
+    let mut items = json_file(&fixture.base().join("items.json")).unwrap();
+    items["legacy:gem"] = json!({"minecraft:max_stack_size":16});
+    write(
+        &fixture.base(),
+        "items.json",
+        &serde_json::to_vec(&items).unwrap(),
+    )
+    .unwrap();
+    let mut registries = json_file(&fixture.base().join("registries.json")).unwrap();
+    registries["minecraft:item"]["entries"]["legacy:gem"] = json!({"protocol_id":1});
+    write(
+        &fixture.base(),
+        "registries.json",
+        &serde_json::to_vec(&registries).unwrap(),
+    )
+    .unwrap();
+    write(&fixture.base(), "horizon-mod-content.json", b"[\"legacy\"]").unwrap();
+    write(
+        &fixture.base(),
+        "assets/legacy/lang/en_us.json",
+        br#"{"item.legacy.gem":"Legacy Gem"}"#,
+    )
+    .unwrap();
+    let old = crate::items::ItemStack::new("minecraft:stick", 3);
+    let old_inventory = horizon_items::item_nbt::encode_items(&[Some(old)]);
+    let root = fixture.root(&pair(false)).unwrap();
+    assert_eq!(mod_content::namespaces(&root), ["alpha", "beta", "legacy"]);
+    let catalog = crate::items::Items::catalog(&root).unwrap();
+    assert_eq!(catalog.get("legacy:gem").unwrap().max_stack, 16);
+    assert_eq!(
+        crate::creative::Names::load(&root).item("legacy:gem"),
+        "Legacy Gem"
+    );
+    let decoded = horizon_items::item_nbt::decode_items(Some(&old_inventory), 1);
+    assert_eq!(
+        decoded[0].as_ref().unwrap().item.as_ref(),
+        "minecraft:stick"
+    );
+    assert_eq!(decoded[0].as_ref().unwrap().count, 3);
+    let registries = json_file(&root.join("registries.json")).unwrap();
+    assert_eq!(
+        registries["minecraft:item"]["entries"]["legacy:gem"]["protocol_id"],
+        1
+    );
+    // The derived marker write must not follow the base marker's overlay link.
+    assert_eq!(mod_content::namespaces(&fixture.base()), ["legacy"]);
 }
