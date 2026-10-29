@@ -310,6 +310,60 @@ impl Creative {
             shown: Mutex::new(None),
         }
     }
+    /// Add categories supplied by a content adapter, in stable ID order. The
+    /// caller resolves item/icon IDs against the loaded host catalog first.
+    /// Existing tabs keep their positions; new categories use vacant positions
+    /// in the current 2x7 layout. Overflow fails before any state changes.
+    pub fn append_tabs(&mut self, mut additions: Vec<Tab>) -> Result<()> {
+        if additions.is_empty() {
+            return Ok(());
+        }
+        let mut ids: std::collections::BTreeSet<_> =
+            self.tabs.iter().map(|tab| tab.id.as_str()).collect();
+        for tab in &additions {
+            if tab.id.is_empty() || !ids.insert(&tab.id) {
+                return Err(format!("duplicate or empty creative tab ID: {}", tab.id).into());
+            }
+            if tab.search || tab.inventory {
+                return Err(format!("{}: only category tabs can be appended", tab.id).into());
+            }
+            if tab.icon.is_empty() {
+                return Err(format!("{}: creative tab needs a resolved icon", tab.id).into());
+            }
+        }
+        let vacant: Vec<_> = [true, false]
+            .into_iter()
+            .flat_map(|top| (0..7).map(move |column| (top, column)))
+            .filter(|&(top, column)| !self.tabs.iter().any(|t| t.top == top && t.column == column))
+            .collect();
+        if additions.len() > vacant.len() {
+            return Err(format!("creative tab capacity exceeded: {} categories need {} vacant positions; pagination is not available",
+                additions.len(), vacant.len()).into());
+        }
+        additions.sort_by(|a, b| a.id.cmp(&b.id));
+        for (tab, (top, column)) in additions.iter_mut().zip(vacant) {
+            tab.top = top;
+            tab.column = column;
+            for stack in &tab.items {
+                if !self.search_items.iter().any(|s| same_components(s, stack)) {
+                    let (namespace, path) = split_id(&java_lower(&stack.item));
+                    self.search_index.push(SearchEntry {
+                        namespace,
+                        path,
+                        ..Default::default()
+                    });
+                    self.search_items.push(stack.clone());
+                }
+            }
+        }
+        self.tabs.extend(additions);
+        for tab in self.tabs.iter_mut().filter(|tab| tab.search) {
+            tab.items.clone_from(&self.search_items);
+        }
+        self.forget_items();
+        Ok(())
+    }
+
     /// Where a stack comes in the creative tabs (the search tab lists them
     /// all, in tab order): the same stack's place, else its item's first.
     /// None for items the tabs don't show.
@@ -789,6 +843,120 @@ mod tests {
             tab("minecraft:inventory", "INVENTORY", vec![]),
         ]}))
         .unwrap()
+    }
+
+    fn contributed_tab(id: &str, items: &[&str]) -> Tab {
+        Tab {
+            id: id.into(),
+            title: format!("itemGroup.{id}"),
+            icon: "alpha:widget".into(),
+            items: items.iter().map(|id| ItemStack::new(id, 1)).collect(),
+            // Caller-provided positions are replaced by the adapter.
+            top: true,
+            column: u32::MAX,
+            search: false,
+            inventory: false,
+        }
+    }
+
+    #[test]
+    fn appended_categories_keep_vanilla_positions_and_join_existing_search() {
+        let mut c = creative(1);
+        let names = Names {
+            map: HashMap::from([("item.alpha.widget".into(), "Шестерёнка".into())]),
+        };
+        let original: Vec<_> = c
+            .tabs
+            .iter()
+            .map(|t| (t.id.clone(), t.top, t.column))
+            .collect();
+        let selected = c.selected;
+        let additions = vec![
+            contributed_tab("beta:parts", &["alpha:widget", "beta:part"]),
+            contributed_tab("alpha:parts", &["alpha:widget"]),
+            contributed_tab("beta:empty", &[]),
+        ];
+        c.append_tabs(additions.clone()).unwrap();
+        assert_eq!(c.selected, selected);
+        assert_eq!(
+            c.tabs[..original.len()]
+                .iter()
+                .map(|t| (t.id.clone(), t.top, t.column))
+                .collect::<Vec<_>>(),
+            original
+        );
+        assert_eq!(
+            c.tabs[original.len()..]
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha:parts", "beta:empty", "beta:parts"]
+        );
+        for tab in &c.tabs[original.len()..] {
+            assert!(tab.column < 7);
+            assert_eq!(
+                c.tabs
+                    .iter()
+                    .filter(|t| t.top == tab.top && t.column == tab.column)
+                    .count(),
+                1
+            );
+        }
+        let found = c.search_results("alpha:widget", &names);
+        assert_eq!(found.len(), 1);
+        assert_eq!(c.search_items[found[0]].item.as_ref(), "alpha:widget");
+        assert_eq!(c.search_results("шестерёнка", &names), found);
+        let mut other = creative(1);
+        other
+            .append_tabs(additions.into_iter().rev().collect())
+            .unwrap();
+        assert_eq!(
+            c.tabs
+                .iter()
+                .map(|t| (&t.id, t.top, t.column))
+                .collect::<Vec<_>>(),
+            other
+                .tabs
+                .iter()
+                .map(|t| (&t.id, t.top, t.column))
+                .collect::<Vec<_>>()
+        );
+        let empty = c.tabs.iter().position(|t| t.id == "beta:empty").unwrap();
+        c.select(empty);
+        assert!(c.items(&names).is_empty());
+    }
+
+    #[test]
+    fn invalid_or_overflowing_tab_batches_leave_existing_state_unchanged() {
+        let mut c = creative(1);
+        let before: Vec<_> = c.tabs.iter().map(|t| t.id.clone()).collect();
+        let before_search = c.search_items.clone();
+        let mut special = contributed_tab("beta:special", &[]);
+        special.search = true;
+        for additions in [
+            vec![
+                contributed_tab("alpha:parts", &[]),
+                contributed_tab("alpha:parts", &[]),
+            ],
+            vec![contributed_tab(&before[0], &[])],
+            vec![special],
+            (0..15)
+                .map(|i| contributed_tab(&format!("alpha:tab_{i}"), &[]))
+                .collect(),
+        ] {
+            assert!(c.append_tabs(additions).is_err());
+            assert_eq!(
+                c.tabs.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
+                before
+            );
+            assert_eq!(c.search_items, before_search);
+        }
+        c.append_tabs(Vec::new()).unwrap();
+        assert_eq!(
+            c.tabs.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
+            before
+        );
+        assert_eq!(c.search_items, before_search);
     }
 
     #[test]
