@@ -13,6 +13,26 @@ pub(super) struct GameplayState {
     pub failed: bool,
 }
 
+fn initialize_entity(
+    entities: &mut horizon_client::block_entities::BlockEntities,
+    key: (i32, i32, i32),
+    descriptor: &horizon_native_api::BlockEntityDescriptor,
+) -> bool {
+    use horizon_client::containers::BlockEntity;
+    if matches!(entities.get(&key), Some(BlockEntity::Extension { .. })) {
+        return false;
+    }
+    entities.insert(
+        key,
+        BlockEntity::Extension {
+            id: descriptor.id.to_string(),
+            version: descriptor.version,
+            data: descriptor.fields.clone(),
+        },
+    );
+    true
+}
+
 impl Game<'_> {
     fn native_authority(&self) -> bool {
         self.remote.is_none()
@@ -177,7 +197,6 @@ impl Game<'_> {
 
     /// Initialize registered data on ordinary checked player/command/action placements.
     pub(super) fn native_api_entity_at(&mut self, position: [i32; 3]) {
-        use horizon_client::containers::BlockEntity;
         let Some(state) = self.pack.assets.registry.state(self.world.block(
             position[0],
             position[1],
@@ -196,15 +215,8 @@ impl Game<'_> {
             return;
         };
         let key = (position[0], position[1], position[2]);
-        if !self.world.block_entities.contains_key(&key) {
-            self.world.block_entities.insert(
-                key,
-                BlockEntity::Extension {
-                    id: descriptor.id.to_string(),
-                    version: descriptor.version,
-                    data: descriptor.fields.clone(),
-                },
-            );
+        // Registered schemas win over the ordinary template/name fallback.
+        if initialize_entity(&mut self.world.block_entities, key, descriptor) {
             self.world
                 .modified
                 .insert((position[0] >> 4, position[2] >> 4));
@@ -496,5 +508,41 @@ impl Game<'_> {
                 _ => self._native_api.gameplay.actions.push(queued),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn registered_data_replaces_template_container_but_retains_live_payload() {
+        use horizon_client::containers::BlockEntity;
+        let mut entities = horizon_client::block_entities::BlockEntities::default();
+        let descriptor = horizon_native_api::BlockEntityDescriptor {
+            id: "fixture:data".parse().unwrap(),
+            block: "fixture:red_shulker_box".parse().unwrap(),
+            version: 1,
+            fields: BTreeMap::from([("visits".into(), 0)]),
+        };
+        let key = (1, 80, 1);
+        entities.insert(
+            key,
+            BlockEntity::for_block(descriptor.block.as_str()).expect("ordinary suffix fallback"),
+        );
+        assert!(initialize_entity(&mut entities, key, &descriptor));
+        assert_eq!(entities[&key].id(), "fixture:data");
+        entities.insert(
+            key,
+            BlockEntity::Extension {
+                id: "fixture:data".into(),
+                version: 1,
+                data: BTreeMap::from([("visits".into(), 42)]),
+            },
+        );
+        assert!(!initialize_entity(&mut entities, key, &descriptor));
+        let BlockEntity::Extension { data, .. } = &entities[&key] else {
+            panic!("wrong data kind")
+        };
+        assert_eq!(data["visits"], 42);
     }
 }
