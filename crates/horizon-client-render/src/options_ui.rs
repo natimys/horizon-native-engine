@@ -916,6 +916,8 @@ pub enum Page {
     Mods,
     /// A native mod's settings page: its index in `mods.installed`.
     NativeMod(usize),
+    /// Read-only catalog entry; no settings or runtime switch.
+    ModDetails(usize),
     /// Horizon's shader packs, either kind (`shader_pack_list`).
     ShaderPacks,
     /// Horizon's graphics settings (`graphics_ui`).
@@ -1176,7 +1178,7 @@ fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
     }
 }
 /// What a button opening one of Horizon's pages says on hover.
-fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
+fn horizon_page_tooltip(page: Page, has_catalog: bool) -> Option<&'static str> {
     Some(match page {
         Page::Horizon => "Horizon's own settings: graphics, controllers, extras and mods.",
         Page::Graphics => "Graphics, simply: each setting says what it costs.",
@@ -1190,6 +1192,9 @@ fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
         Page::Agent => "Let your own AI agent play: horizon-ctl and MCP clients on this computer.",
         Page::ShaderPacks => {
             "Shader packs from the shaderpacks folder: Horizon's own and those in the shaders/ format. One runs at a time."
+        }
+        Page::Mods if has_catalog => {
+            "WASM mods from horizon-mods run in a sandbox when enabled. Linked native mods run with full process privileges; see their details."
         }
         Page::Mods => {
             "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on."
@@ -1324,6 +1329,7 @@ impl OptionsUi {
             Page::Packs => "resourcePack.title",
             Page::Mods => "Mods",
             Page::NativeMod(_) => "Mod Settings",
+            Page::ModDetails(_) => "Mod Details",
             Page::ShaderPacks => "Shader Packs",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
@@ -1696,12 +1702,13 @@ impl OptionsUi {
             }
             Page::Font => pairs(&[Opt::ForceUnicode, Opt::JapaneseGlyphs]),
             Page::Mods => {
-                if s.mods.installed.is_empty() {
+                if s.mods.installed.is_empty() && s.mods.catalog.is_empty() {
                     return vec![Row::Header(
                         "No mods: put .hmod files in the horizon-mods folder",
                     )];
                 }
-                s.mods
+                let mut rows: Vec<_> = s
+                    .mods
                     .installed
                     .iter()
                     .enumerate()
@@ -1734,8 +1741,25 @@ impl OptionsUi {
                             Row::Buttons(if dead { inactive(widget) } else { widget }, None)
                         }
                     })
-                    .collect()
+                    .collect();
+                for (i, entry) in s.mods.catalog.iter().enumerate() {
+                    rows.push(Row::Buttons(
+                        button(
+                            0.0,
+                            0.0,
+                            310.0,
+                            Text::literal(entry.title.clone()),
+                            Act::Push(Page::ModDetails(i)),
+                        ),
+                        None,
+                    ));
+                    rows.push(Row::Note(entry.loading_model.clone()));
+                }
+                rows
             }
+            Page::ModDetails(i) => s.mods.catalog.get(i).map_or_else(Vec::new, |entry| {
+                entry.details.iter().cloned().map(Row::Note).collect()
+            }),
             Page::NativeMod(i) => self.native_rows(s, i),
             Page::ShaderPacks => {
                 if s.shader_packs.is_empty() {
@@ -2365,7 +2389,7 @@ impl OptionsUi {
                     act: Act::Push(page),
                     ..
                 } = &wd.kind
-                    && let Some(text) = horizon_page_tooltip(*page)
+                    && let Some(text) = horizon_page_tooltip(*page, !s.mods.catalog.is_empty())
                 {
                     tooltip = Some(atlas.font.split(&Text::literal(text), 170.0));
                 }
@@ -3402,6 +3426,63 @@ mod tests {
         assert!(!s.mods.is_on(0));
         assert!(!ui.back(&mut s).contains(&Event::Close));
         assert_eq!(ui.page(), Page::Main);
+    }
+
+    #[test]
+    fn catalog_details_share_navigation_without_toggles_or_wasm_owner_changes() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        for id in ["alpha", "beta"] {
+            s.mods.catalog.push(crate::mod_list::CatalogMod {
+                id: id.into(),
+                title: format!("{id} 1.0"),
+                loading_model: "Native Rust (statically linked)".into(),
+                details: (0..40).map(|i| format!("Метаданные {id}: {i}")).collect(),
+            });
+        }
+        ui.show(Page::Mods);
+        let (widgets, ..) = ui.layout(&s, size.0, size.1);
+        assert!(!widgets.iter().any(|w| matches!(
+            w.kind,
+            WKind::Button {
+                act: Act::ToggleMod(_) | Act::ModSettings(_),
+                ..
+            }
+        )));
+        for i in 0..2 {
+            let row = widgets
+                .iter()
+                .find(|w| {
+                    matches!(w.kind,
+                WKind::Button { act: Act::Push(Page::ModDetails(j)), .. } if i == j)
+                })
+                .unwrap();
+            let events = ui.click(
+                &mut s,
+                &atlas,
+                row.x + 1.0,
+                row.y + 1.0,
+                size,
+                [480, 240],
+                false,
+                false,
+            );
+            assert!(!events.contains(&Event::Changed));
+            assert_eq!(ui.page(), Page::ModDetails(i));
+            let (_, _, _, content) = ui.layout(&s, size.0, size.1);
+            assert!(content > size.1);
+            ui.draw(&s, &mut HudBatch::new([480, 240]), &atlas, (0.0, 0.0));
+            assert!(!ui.back(&mut s).contains(&Event::Close));
+            assert_eq!(ui.page(), Page::Mods);
+        }
+        // Catalog entries cannot create WASM enable/disable lines, even with
+        // an ID that the player already uses in another loading model.
+        let before = s.mods.serialize();
+        s.mods.toggle(0);
+        assert_eq!(s.mods.serialize(), before);
+        assert!(s.mods.installed.is_empty());
     }
 
     #[test]

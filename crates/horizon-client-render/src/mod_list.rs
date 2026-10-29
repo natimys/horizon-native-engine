@@ -25,6 +25,19 @@ pub struct ModList {
     pub keys: BTreeMap<String, BTreeMap<String, String>>,
     /// What the Mods page shows, filled by the game from the mods it found.
     pub installed: Vec<Installed>,
+    /// Informational entries supplied by a host catalog, never persisted or toggled.
+    /// Separate from `installed` so WASM screen owner indices remain unchanged.
+    pub catalog: Vec<CatalogMod>,
+}
+
+/// A read-only entry rendered by the existing Mods screen. The host supplies
+/// text lines wrapped with the current font; no mod callbacks enter the UI.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CatalogMod {
+    pub id: String,
+    pub title: String,
+    pub loading_model: String,
+    pub details: Vec<String>,
 }
 
 /// One installed mod as the Mods page shows it.
@@ -88,6 +101,7 @@ impl ModList {
             disabled,
             keys,
             installed: Vec::new(),
+            catalog: Vec::new(),
         }
     }
     pub fn serialize(&self) -> String {
@@ -149,6 +163,22 @@ impl ModList {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn informational_catalog_does_not_change_switches_or_persistence() {
+        let mut list = ModList::parse("mod.shared:true\n");
+        list.catalog.push(CatalogMod {
+            id: "shared".into(),
+            title: "Linked 1.0".into(),
+            loading_model: "Native Rust".into(),
+            details: vec!["Metadata".into()],
+        });
+        assert!(!list.is_on(0));
+        list.toggle(0);
+        assert_eq!(list.serialize(), "mod.shared:true\n");
+        assert!(ModList::parse(&list.serialize()).catalog.is_empty());
+        assert!(list.installed.is_empty());
+    }
 
     #[test]
     fn round_trips_and_ignores_the_rest() {
