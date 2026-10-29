@@ -242,6 +242,11 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
     if !content.block_entities.is_empty() {
         let facts = json_file(&root.join("facts.json"))?;
         let mut registries = json_file(&root.join("registries.json"))?;
+        // The Content overlay may be cached from an earlier startup. Derive
+        // extension types from the immutable input, never append to our output.
+        let base_registries = json_file(&base.join("registries.json"))?;
+        registries["minecraft:block_entity_type"] =
+            base_registries["minecraft:block_entity_type"].clone();
         let entries = registries["minecraft:block_entity_type"]["entries"]
             .as_object_mut()
             .ok_or("missing block entity registry")?;
@@ -251,7 +256,10 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
             .max()
             .unwrap_or(-1)
             + 1;
-        let mut mapping = serde_json::Map::new();
+        let mut mapping = base_registries["horizon:extension_block_entity"]["entries"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
         for (offset, entity) in content.block_entities.values().enumerate() {
             let next = next + offset as i64;
             if next > i64::from(i16::MAX) {
@@ -277,7 +285,12 @@ pub fn resource_root(base: &Path, content: &ContentSnapshot, cache: &Path) -> Re
                 return Err(format!("block entity type collision: {}", entity.id).into());
             }
             entries.insert(entity.id.to_string(), json!({"protocol_id":next}));
-            mapping.insert(entity.block.to_string(), json!({"protocol_id":next}));
+            if mapping
+                .insert(entity.block.to_string(), json!({"protocol_id":next}))
+                .is_some()
+            {
+                return Err(format!("block entity mapping collision: {}", entity.block).into());
+            }
         }
         registries["horizon:extension_block_entity"] = json!({"entries":mapping});
         write(&root, "registries.json", &serde_json::to_vec(&registries)?)?;

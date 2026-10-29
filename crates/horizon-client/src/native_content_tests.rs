@@ -425,6 +425,17 @@ fn blocks_use_existing_state_item_and_protocol_tables() {
         },
     );
     let entity_root = fixture.root(&c).unwrap();
+    let first_identity = crate::registry_pack::load(&entity_root).unwrap();
+    let first_tables = fs::read(entity_root.join("registries.json")).unwrap();
+    assert_eq!(fixture.root(&c).unwrap(), entity_root);
+    assert_eq!(
+        fs::read(entity_root.join("registries.json")).unwrap(),
+        first_tables
+    );
+    assert_eq!(
+        crate::registry_pack::load(&entity_root).unwrap(),
+        first_identity
+    );
     let builtin =
         horizon_protocol::registry::Builtin::load(&entity_root.join("registries.json")).unwrap();
     assert_eq!(
