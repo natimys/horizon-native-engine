@@ -71,7 +71,7 @@ mod tests {
         let b = identity("b".repeat(64));
         assert_eq!(
             select(Some(&a), std::slice::from_ref(&a)).unwrap(),
-            [a.clone()]
+            std::slice::from_ref(&a)
         );
         assert!(select(Some(&a), &[b]).is_err());
         assert!(select(Some(&a), &[]).is_err());
