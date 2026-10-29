@@ -77,6 +77,8 @@ pub mod motion;
 pub mod moved_extras;
 pub mod multiplayer;
 pub mod music;
+#[cfg(feature = "native-mods")]
+pub mod native_content;
 pub mod net;
 pub mod nether_portal;
 pub mod offline_name;
