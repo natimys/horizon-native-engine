@@ -34,3 +34,6 @@
 
 # Release-only compiled original exporter bundle.
 /exporters/
+
+# Local operator notes, never part of the public fork.
+/horizon_official_server.txt

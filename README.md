@@ -1,3 +1,7 @@
+> **Independent integration fork:** this checkout carries Horizon Native Mod Loader
+> patches. See [FORK.md](FORK.md) for provenance, build layout and CI. The upstream
+> documentation, badges and download links below describe the original Horizon.
+
 <p align="center">
   <img src="docs/media/banner.webp" alt="Horizon: Minecraft: Java Edition 26.3, rewritten in Rust and checked against vanilla by more than 300 differential harnesses" width="100%">
 </p>
