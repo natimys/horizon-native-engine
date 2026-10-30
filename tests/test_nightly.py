@@ -105,7 +105,8 @@ if __name__ == "__main__":
     unittest.main()
 
 
-WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+# The fork preserves upstream automation as non-executable contract fixtures.
+WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "upstream-workflows"
 
 
 class UntrustedBuildTests(unittest.TestCase):

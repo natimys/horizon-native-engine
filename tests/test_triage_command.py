@@ -225,7 +225,7 @@ class LimitTests(unittest.TestCase):
 
 class WorkflowTests(unittest.TestCase):
     def test_workflow_is_safe(self):
-        text = (ROOT / ".github/workflows/triage-command.yml").read_text()
+        text = (ROOT / ".github/upstream-workflows/triage-command.yml").read_text()
         run_lines = [l for l in text.splitlines() if l.strip().startswith("run:")]
         self.assertEqual(run_lines, ["        run: python3 tools/ci/triage_command.py command"])
         self.assertIn("persist-credentials: false", text)
